@@ -1,0 +1,16 @@
+# Discord Bot Framework
+discord.py>=2.3.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Async Support (usually included with Python 3.7+)
+# But we'll include it for completeness
+aiohttp>=3.8.0
+
+# JSON handling is built into Python, no need to add
+
+# Optional: For future enhancements
+# sqlalchemy>=2.0.0  # If you want to migrate to SQL database
+# alembic>=1.12.0    # For database migrations
+# asyncpg>=0.28.0    # For PostgreSQL async support
