@@ -82,13 +82,15 @@ async def get_or_create_game_forums(
         )
 
     if not voting_forum:
-        # Set up permissions for voting forum (hidden from @everyone)
+        # Set up permissions for voting forum (read-only for everyone)
         overwrites = {}
 
-        # Hide from @everyone
+        # Allow @everyone to view but not post (read-only)
         overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=False,
-            send_messages=False
+            view_channel=True,
+            send_messages=False,
+            send_messages_in_threads=False,
+            create_public_threads=False
         )
 
         # Allow moderators to view (but not send messages - read-only)
@@ -111,7 +113,7 @@ async def get_or_create_game_forums(
 
         voting_forum = await guild.create_forum(
             name=VOTING_FORUM_NAME,
-            topic="Daily voting for active CSS Solaris games (Mods only - vote tally tracking)",
+            topic="Vote tallies for active CSS Solaris games (Read-only - only bot can post)",
             overwrites=overwrites
         )
     else:
@@ -119,10 +121,12 @@ async def get_or_create_game_forums(
         if mod_role or bot_member:
             overwrites = {}
 
-            # Hide from @everyone
+            # Allow @everyone to view but not post (read-only)
             overwrites[guild.default_role] = discord.PermissionOverwrite(
-                view_channel=False,
-                send_messages=False
+                view_channel=True,
+                send_messages=False,
+                send_messages_in_threads=False,
+                create_public_threads=False
             )
 
             # Allow moderators to view (but not send messages - read-only)

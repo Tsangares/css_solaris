@@ -234,18 +234,18 @@ class Moderator(commands.Cog):
             if player_actions_cog and game.name in player_actions_cog.votes:
                 if current_day in player_actions_cog.votes[game.name]:
                     votes = player_actions_cog.votes[game.name][current_day]
-
-            # Debug: Show what we found
-            debug_msg = (
-                f"**Debug Info:**\n"
-                f"Game: {game.name}\n"
-                f"Current Day: {current_day}\n"
-                f"Day from channel detection: {day}\n"
-                f"Votes stored for game: {list(player_actions_cog.votes.get(game.name, {}).keys()) if player_actions_cog else 'N/A'}\n"
-                f"Votes found: {len(votes)} votes\n"
-                f"Vote details: {votes}"
-            )
-            await interaction.followup.send(debug_msg)
+                else:
+                    # Debug: day mismatch
+                    await interaction.followup.send(
+                        f"⚠️ Debug: No votes found for day {current_day}. "
+                        f"Available days: {list(player_actions_cog.votes[game.name].keys())}"
+                    )
+            else:
+                # Debug: game not in votes
+                await interaction.followup.send(
+                    f"⚠️ Debug: No votes found for game '{game.name}'. "
+                    f"Available games: {list(player_actions_cog.votes.keys())}"
+                )
 
             # Get alive players
             alive_players = game.get_alive_players()
@@ -287,9 +287,30 @@ class Moderator(commands.Cog):
                 game.end_game()
                 database.save_game(game)
 
+                # Determine winner(s)
+                alive_players = game.get_alive_players()
+                winner_names = []
+                for player_id in alive_players:
+                    if player_id < 0:
+                        # NPC
+                        npc = database.get_npc_by_id(player_id)
+                        if npc:
+                            winner_names.append(f"🤖 {npc.name}")
+                        else:
+                            winner_names.append(f"🤖 NPC {player_id}")
+                    else:
+                        # Real user
+                        try:
+                            user = await self.bot.fetch_user(player_id)
+                            winner_names.append(user.mention)
+                        except:
+                            winner_names.append(f"<@{player_id}>")
+
+                winner_text = ", ".join(winner_names) if winner_names else "No one"
+
                 embed = discord.Embed(
                     title=f"🏁 {game.name} - Game Over!",
-                    description=announcement + f"\n\n**The game has ended!**",
+                    description=announcement + f"\n\n**The game has ended!**\n**Winner(s):** {winner_text}",
                     color=discord.Color.red()
                 )
 
@@ -307,6 +328,28 @@ class Moderator(commands.Cog):
 
                 # Lock only discussion thread (voting forum permissions prevent posting anyway)
                 await discussion_thread.edit(locked=True, archived=True)
+
+                # Post winner announcement in general channel
+                guild = interaction.guild
+                general_channel = None
+
+                # Try to find general channel (case-insensitive)
+                for channel in guild.text_channels:
+                    if channel.name.lower() in ['general', 'general-chat', 'chat']:
+                        general_channel = channel
+                        break
+
+                if general_channel:
+                    general_embed = discord.Embed(
+                        title=f"🏆 {game.name} has ended!",
+                        description=f"**Winner(s):** {winner_text}\n\nCongratulations! 🎉",
+                        color=discord.Color.gold()
+                    )
+                    try:
+                        await general_channel.send(embed=general_embed)
+                    except:
+                        # If we can't post in general, that's okay
+                        pass
 
                 return
 

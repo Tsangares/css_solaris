@@ -164,17 +164,17 @@ If you prefer to manually grant permissions:
 - ✅ Creates "CSS Solaris Moderator" role
 - ✅ Creates "Game Lobby" forum channel
 - ✅ Creates "Game Discussions" forum channel
-- ✅ Creates "Game Voting" forum channel (hidden from @everyone, mods only)
+- ✅ Creates "Game Voting" forum channel (read-only for everyone)
 - ✅ Verifies all permissions are correct
 
 After setup, assign the "CSS Solaris Moderator" role to users who should be able to start/manage games!
 
-**Note:** The Game Voting forum is automatically set to be hidden from regular players and is read-only for moderators:
-- **@everyone**: Cannot see the channel
-- **Moderators**: Can view but cannot send messages (read-only)
+**Note:** The Game Voting forum is automatically set to be read-only:
+- **@everyone**: Can view but cannot post (read-only)
+- **Moderators**: Can view but cannot post (read-only)
 - **Bot**: Can view, post, and manage threads
 
-This ensures vote tracking remains secret and only the bot can update vote tallies.
+This ensures only the bot can update vote tallies while everyone can see the current voting status.
 
 ## Usage
 
@@ -198,7 +198,7 @@ This ensures vote tracking remains secret and only the bot can update vote talli
    - Can change votes by voting again
    - Can `/vote Abstain` to vote for no elimination
    - Can `/vote Veto` to not participate
-   - Vote tallies are tracked in a hidden channel (mods only)
+   - Vote tallies are tracked in a read-only voting forum (visible to everyone)
 
 3. Moderator ends the day with `/end_day` **in the discussion thread**
    - Bot counts votes and announces results
@@ -208,7 +208,7 @@ This ensures vote tracking remains secret and only the bot can update vote talli
 
 4. Repeat until game ends
 
-**Note:** The voting channel is hidden from regular players and read-only for mods. All discussion and voting happens in the discussion thread. When someone votes, a public confirmation appears with a link to the vote tally (only mods can access the link).
+**Note:** The voting channel is read-only for everyone (only the bot can post). All discussion and voting happens in the discussion thread. When someone votes, a public confirmation appears with a link to the vote tally that everyone can view.
 
 ### Testing with NPCs
 
@@ -253,7 +253,7 @@ For solo testing before running a real game:
 - `/npc_vote` has dropdown autocomplete for both NPC names and vote targets
 - `/npc_join` and `/npc_delete` also have autocomplete for easy NPC selection
 - NPCs can be voted for by name using `/vote Alice` (autocomplete supported)
-- Vote tracking is hidden from players, visible only to mods
+- Vote tracking is visible to everyone in the read-only voting forum
 - **Anyone can create and control NPCs** - no special permissions required!
 
 ## Project Structure
