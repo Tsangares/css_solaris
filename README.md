@@ -40,7 +40,7 @@ A Discord bot for running social deduction games similar to Mafia, Werewolf, Sec
 | Command | Description |
 |---------|-------------|
 | `/start` | Start a game (use in signup thread, requires moderator or game creator) |
-| `/end_day <name>` | End current day and count votes (requires moderator or game creator) |
+| `/end_day` | End current day and count votes (use in discussion thread, requires moderator or game creator) |
 
 ### NPC Commands
 
@@ -200,7 +200,7 @@ This ensures vote tracking remains secret and only the bot can update vote talli
    - Can `/vote Veto` to not participate
    - Vote tallies are tracked in a hidden channel (mods only)
 
-3. Moderator ends the day with `/end_day <game_name>`
+3. Moderator ends the day with `/end_day` **in the discussion thread**
    - Bot counts votes and announces results
    - Player with most votes is eliminated (ties = no elimination)
    - Creates Day 2 threads automatically
@@ -243,7 +243,7 @@ For solo testing before running a real game:
    /npc_vote Alice Bob
    /npc_vote Charlie Abstain
    /vote Alice (your vote)
-   /end_day TestGame
+   /end_day
    ```
 
 4. NPCs appear alongside real players in all game displays!

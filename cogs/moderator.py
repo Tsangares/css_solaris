@@ -179,14 +179,30 @@ class Moderator(commands.Cog):
             await interaction.followup.send(f"❌ Setup failed at step: {e}\n\n```\n{error_details[:1000]}\n```")
 
     @app_commands.command(name="end_day", description="End the current day and tally votes (Moderator only)")
-    @app_commands.describe(name="The name of the game")
-    async def end_day(self, interaction: discord.Interaction, name: str):
+    async def end_day(self, interaction: discord.Interaction):
         """End the current day, count votes, and advance to next day."""
-        # Load game
-        game = database.get_game(name)
+        # Get the player_actions cog to access get_game_from_channel
+        player_actions_cog = self.bot.get_cog('PlayerActions')
+        if not player_actions_cog:
+            await interaction.response.send_message(
+                "❌ PlayerActions cog not loaded!",
+                ephemeral=True
+            )
+            return
+
+        # Find game from current channel
+        game, day = player_actions_cog.get_game_from_channel(interaction.channel.id)
+
         if not game:
             await interaction.response.send_message(
-                f"❌ No game named '{name}' found!",
+                "❌ This channel is not a game channel! Use this command in the discussion thread.",
+                ephemeral=True
+            )
+            return
+
+        if day == 0 or day is None:
+            await interaction.response.send_message(
+                f"❌ Could not determine which day this is! Use this command in the discussion thread.",
                 ephemeral=True
             )
             return
@@ -202,7 +218,7 @@ class Moderator(commands.Cog):
         # Check if game is active
         if game.status != GameStatus.ACTIVE:
             await interaction.response.send_message(
-                f"❌ Game '{name}' is not currently active!",
+                f"❌ Game '{game.name}' is not currently active!",
                 ephemeral=True
             )
             return
@@ -213,12 +229,23 @@ class Moderator(commands.Cog):
         try:
             current_day = game.current_day
 
-            # Get votes from PlayerActions cog
-            player_actions_cog = self.bot.get_cog('PlayerActions')
+            # Get votes from PlayerActions cog (already fetched above)
             votes = {}
-            if player_actions_cog and name in player_actions_cog.votes:
-                if current_day in player_actions_cog.votes[name]:
-                    votes = player_actions_cog.votes[name][current_day]
+            if player_actions_cog and game.name in player_actions_cog.votes:
+                if current_day in player_actions_cog.votes[game.name]:
+                    votes = player_actions_cog.votes[game.name][current_day]
+
+            # Debug: Show what we found
+            debug_msg = (
+                f"**Debug Info:**\n"
+                f"Game: {game.name}\n"
+                f"Current Day: {current_day}\n"
+                f"Day from channel detection: {day}\n"
+                f"Votes stored for game: {list(player_actions_cog.votes.get(game.name, {}).keys()) if player_actions_cog else 'N/A'}\n"
+                f"Votes found: {len(votes)} votes\n"
+                f"Vote details: {votes}"
+            )
+            await interaction.followup.send(debug_msg)
 
             # Get alive players
             alive_players = game.get_alive_players()
@@ -261,7 +288,7 @@ class Moderator(commands.Cog):
                 database.save_game(game)
 
                 embed = discord.Embed(
-                    title=f"🏁 {name} - Game Over!",
+                    title=f"🏁 {game.name} - Game Over!",
                     description=announcement + f"\n\n**The game has ended!**",
                     color=discord.Color.red()
                 )
@@ -278,8 +305,7 @@ class Moderator(commands.Cog):
                 await votes_thread.send(embed=embed)
                 await discussion_thread.send(embed=embed)
 
-                # Lock the threads
-                await votes_thread.edit(locked=True, archived=True)
+                # Lock only discussion thread (voting forum permissions prevent posting anyway)
                 await discussion_thread.edit(locked=True, archived=True)
 
                 return
@@ -301,27 +327,27 @@ class Moderator(commands.Cog):
 
             # Create Day N discussion thread
             discussion_embed = discord.Embed(
-                title=f"💬 {name} - Day {next_day} Discussion",
+                title=f"💬 {game.name} - Day {next_day} Discussion",
                 description=f"Discuss and strategize here!",
                 color=discord.Color.blue()
             )
 
             discussion_thread = await discussions_forum.create_thread(
-                name=f"💬 {name} - Day {next_day}",
-                content=f"**Day {next_day} Discussion for {name}**",
+                name=f"💬 {game.name} - Day {next_day}",
+                content=f"**Day {next_day} Discussion for {game.name}**",
                 embed=discussion_embed
             )
 
             # Create Day N voting thread with vote tracking embed
             vote_embed = discord.Embed(
-                title=f"📊 Day {next_day} Votes - {name}",
+                title=f"📊 Day {next_day} Votes - {game.name}",
                 description="No votes yet. Use `/vote @player` or `/vote Abstain` or `/vote Veto`",
                 color=discord.Color.blue()
             )
 
             voting_thread = await voting_forum.create_thread(
-                name=f"🗳️ {name} - Day {next_day}",
-                content=f"**Day {next_day} Voting for {name}**",
+                name=f"🗳️ {game.name} - Day {next_day}",
+                content=f"**Day {next_day} Voting for {game.name}**",
                 embed=vote_embed
             )
 
@@ -337,11 +363,11 @@ class Moderator(commands.Cog):
             }
             database.save_game(game)
 
-            # Lock old threads
+            # Lock old discussion thread (voting thread stays open for viewing)
             old_votes_thread = await self.bot.fetch_channel(game.channels[current_day]["votes_channel_id"])
             old_discussion_thread = await self.bot.fetch_channel(game.channels[current_day]["discussion_channel_id"])
 
-            await old_votes_thread.edit(locked=True, archived=True)
+            # Only lock discussion thread - voting forum permissions prevent posting anyway
             await old_discussion_thread.edit(locked=True, archived=True)
 
             # Announce results
@@ -366,7 +392,7 @@ class Moderator(commands.Cog):
 
             # Player announcement (doesn't mention hidden votes channel)
             player_next_day_embed = discord.Embed(
-                title=f"🌅 {name} - Day {next_day} Begins!",
+                title=f"🌅 {game.name} - Day {next_day} Begins!",
                 description=f"**Alive Players ({len(game.get_alive_players())}):**\n" + ", ".join(alive_mentions) + "\n\n"
                            f"**Discussion Thread:** {discussion_thread.thread.mention}\n"
                            f"Discuss and use `/vote @player` (or `/vote Abstain` or `/vote Veto`) here!",
@@ -375,7 +401,7 @@ class Moderator(commands.Cog):
 
             # Mod announcement (includes votes channel)
             mod_next_day_embed = discord.Embed(
-                title=f"🌅 {name} - Day {next_day} Begins!",
+                title=f"🌅 {game.name} - Day {next_day} Begins!",
                 description=f"**Alive Players ({len(game.get_alive_players())}):**\n" + ", ".join(alive_mentions) + "\n\n"
                            f"**Threads:**\n"
                            f"💬 {discussion_thread.thread.mention} - Discussion and voting\n"
@@ -388,7 +414,7 @@ class Moderator(commands.Cog):
 
             await old_votes_thread.send(embed=result_embed)
             await old_discussion_thread.send(embed=result_embed)
-            await voting_thread.thread.send(embed=mod_next_day_embed)
+            # Don't post announcement in new voting thread - keep it clean for vote tally only
             await discussion_thread.thread.send(embed=player_next_day_embed)
 
         except Exception as e:

@@ -342,6 +342,25 @@ class NPCCommands(commands.Cog):
             )
             return
 
+        if day == 0 or day is None:
+            # User is in the wrong channel - show them where to go
+            if game.current_day in game.channels:
+                discussion_channel_id = game.channels[game.current_day].get('discussion_channel_id')
+                if discussion_channel_id:
+                    await interaction.followup.send(
+                        f"❌ Please use `/npc_vote` in the discussion thread!\n\n"
+                        f"Go to: <#{discussion_channel_id}>",
+                        ephemeral=True
+                    )
+                    return
+
+            # Fallback error
+            await interaction.followup.send(
+                f"❌ Could not find the discussion thread for Day {game.current_day}!",
+                ephemeral=True
+            )
+            return
+
         # Check if game is active
         if game.status != GameStatus.ACTIVE:
             await interaction.followup.send(

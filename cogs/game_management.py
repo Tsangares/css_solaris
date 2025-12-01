@@ -40,7 +40,7 @@ class GameManagement(commands.Cog):
                 title=f"🎮 {name} - Signup",
                 description=f"A new CSS Solaris game created by {interaction.user.mention}!\n\n"
                            f"Use `/join` in this thread to join the game.\n"
-                           f"Once enough players have joined, a moderator can use `/start {name}` to begin!",
+                           f"Once enough players have joined, a moderator can use `/start` to begin!",
                 color=discord.Color.green()
             )
             embed.add_field(name="Players", value="None yet", inline=False)
@@ -104,7 +104,7 @@ class GameManagement(commands.Cog):
         # Check if game is in signup status
         if game.status != GameStatus.SIGNUP:
             await interaction.response.send_message(
-                f"❌ Game '{name}' has already started or ended!",
+                f"❌ Game '{game.name}' has already started or ended!",
                 ephemeral=True
             )
             return
@@ -136,27 +136,27 @@ class GameManagement(commands.Cog):
 
             # Create Day 1 discussion thread
             discussion_embed = discord.Embed(
-                title=f"💬 {name} - Day 1 Discussion",
+                title=f"💬 {game.name} - Day 1 Discussion",
                 description=f"Discuss and strategize here!",
                 color=discord.Color.blue()
             )
 
             discussion_thread = await discussions_forum.create_thread(
-                name=f"💬 {name} - Day 1",
-                content=f"**Day 1 Discussion for {name}**",
+                name=f"💬 {game.name} - Day 1",
+                content=f"**Day 1 Discussion for {game.name}**",
                 embed=discussion_embed
             )
 
             # Create Day 1 voting thread with vote tracking embed
             vote_embed = discord.Embed(
-                title=f"📊 Day 1 Votes - {name}",
+                title=f"📊 Day 1 Votes - {game.name}",
                 description="No votes yet. Use `/vote @player` or `/vote Abstain` or `/vote Veto`",
                 color=discord.Color.blue()
             )
 
             voting_thread = await voting_forum.create_thread(
-                name=f"🗳️ {name} - Day 1",
-                content=f"**Day 1 Voting for {name}**",
+                name=f"🗳️ {game.name} - Day 1",
+                content=f"**Day 1 Voting for {game.name}**",
                 embed=vote_embed
             )
 
@@ -205,7 +205,7 @@ class GameManagement(commands.Cog):
 
             # Announcement for players (don't mention hidden votes channel)
             player_announcement = discord.Embed(
-                title=f"🌅 {name} - Day 1 Begins!",
+                title=f"🌅 {game.name} - Day 1 Begins!",
                 description=game_description +
                            f"**Players ({len(game.players)}):**\n" + ", ".join(player_mentions) + "\n\n"
                            f"**Discussion Thread:** {discussion_thread.thread.mention}\n"
@@ -216,7 +216,7 @@ class GameManagement(commands.Cog):
 
             # Announcement for mods (includes votes channel)
             mod_announcement = discord.Embed(
-                title=f"🌅 {name} - Day 1 Begins!",
+                title=f"🌅 {game.name} - Day 1 Begins!",
                 description=f"The game has started!\n\n"
                            f"**Players ({len(game.players)}):**\n" + ", ".join(player_mentions) + "\n\n"
                            f"**Threads:**\n"
@@ -227,7 +227,7 @@ class GameManagement(commands.Cog):
             )
 
             await interaction.followup.send(embed=player_announcement)
-            await voting_thread.thread.send(embed=mod_announcement)
+            # Don't post announcement in voting thread - keep it clean for vote tally only
             await discussion_thread.thread.send(embed=player_announcement)
 
         except Exception as e:
