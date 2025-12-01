@@ -98,7 +98,8 @@ class NPCCommands(commands.Cog):
         choices = []
 
         for npc in npcs.values():
-            if current.lower() in npc.name.lower():
+            # Show all NPCs if nothing typed yet, otherwise filter
+            if not current or current.lower() in npc.name.lower():
                 choices.append(app_commands.Choice(name=f"🤖 {npc.name}", value=npc.name))
 
         return choices[:25]  # Discord limit
@@ -306,10 +307,26 @@ class NPCCommands(commands.Cog):
     async def npc_vote(self, interaction: discord.Interaction, npc_name: str, target: str):
         """Make an NPC cast a vote (use in discussion or votes channel)."""
 
+        # Defer immediately to avoid timeout
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            await self._execute_npc_vote(interaction, npc_name, target)
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            await interaction.followup.send(
+                f"❌ Error in npc_vote: {e}\n\n```\n{error_details[:1000]}\n```",
+                ephemeral=True
+            )
+
+    async def _execute_npc_vote(self, interaction: discord.Interaction, npc_name: str, target: str):
+        """Internal method to execute NPC vote."""
+
         # Get the player_actions cog to access get_game_from_channel
         player_actions_cog = self.bot.get_cog("PlayerActions")
         if not player_actions_cog:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ PlayerActions cog not loaded!",
                 ephemeral=True
             )
@@ -319,7 +336,7 @@ class NPCCommands(commands.Cog):
         game, day = player_actions_cog.get_game_from_channel(interaction.channel.id)
 
         if not game:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ This channel is not a game channel! Use this command in the discussion or votes thread.",
                 ephemeral=True
             )
@@ -327,7 +344,7 @@ class NPCCommands(commands.Cog):
 
         # Check if game is active
         if game.status != GameStatus.ACTIVE:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Game '{game.name}' is not currently active!",
                 ephemeral=True
             )
@@ -336,7 +353,7 @@ class NPCCommands(commands.Cog):
         # Check if NPC exists
         npc = database.get_npc(npc_name)
         if not npc:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ NPC '{npc_name}' not found!",
                 ephemeral=True
             )
@@ -344,7 +361,7 @@ class NPCCommands(commands.Cog):
 
         # Check if NPC is in the game
         if npc.id not in game.players:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ NPC '{npc_name}' is not in this game!",
                 ephemeral=True
             )
@@ -352,7 +369,7 @@ class NPCCommands(commands.Cog):
 
         # Check if NPC is alive
         if not game.is_player_alive(npc.id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ NPC '{npc_name}' has been eliminated!",
                 ephemeral=True
             )
@@ -375,13 +392,13 @@ class NPCCommands(commands.Cog):
                     vote_target = int(target_id_str)
                     # Verify target is in game and alive
                     if vote_target not in game.players:
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             "❌ That player is not in this game!",
                             ephemeral=True
                         )
                         return
                     if not game.is_player_alive(vote_target):
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             "❌ That player has been eliminated!",
                             ephemeral=True
                         )
@@ -408,7 +425,7 @@ class NPCCommands(commands.Cog):
                     target_display = f"🤖 **{target_npc.name}**"
 
             if vote_target is None:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ Invalid vote target! Use @mention, NPC name, 'Abstain', or 'Veto'.",
                     ephemeral=True
                 )
@@ -475,13 +492,13 @@ class NPCCommands(commands.Cog):
                 )
 
             # Confirm vote
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"✅ NPC '{npc_name}' voted for {target_display}!",
                 ephemeral=True
             )
 
         except Exception as e:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Failed to update vote: {e}",
                 ephemeral=True
             )
