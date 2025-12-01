@@ -1,6 +1,6 @@
 """
-Game Master Commands Cog
-Handles NPC management for testing purposes.
+NPC Commands Cog
+Handles NPC management for all users.
 """
 
 import discord
@@ -12,26 +12,19 @@ from utils import database, permissions
 from typing import Dict
 
 
-class GMCommands(commands.Cog):
-    """Cog for Game Master commands to control NPCs."""
+class NPCCommands(commands.Cog):
+    """Cog for NPC commands available to all users."""
 
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="gm_npc_create", description="[GM] Create an NPC player for testing")
+    @app_commands.command(name="npc_create", description="Create an NPC player for testing")
     @app_commands.describe(
         name="Name of the NPC",
         persona="Character personality/description (e.g., 'Aggressive and suspicious')"
     )
     async def create_npc(self, interaction: discord.Interaction, name: str, persona: str):
         """Create a new NPC player."""
-        # Check if user has moderator permissions
-        if not permissions.is_moderator(interaction.user):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
-                ephemeral=True
-            )
-            return
 
         # Check if NPC already exists
         if database.npc_exists(name):
@@ -53,16 +46,9 @@ class GMCommands(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="gm_npc_list", description="[GM] List all NPCs")
+    @app_commands.command(name="npc_list", description="List all NPCs")
     async def list_npcs(self, interaction: discord.Interaction):
         """List all NPCs."""
-        # Check if user has moderator permissions
-        if not permissions.is_moderator(interaction.user):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
-                ephemeral=True
-            )
-            return
 
         npcs = database.load_npcs()
 
@@ -86,17 +72,91 @@ class GMCommands(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="gm_npc_delete", description="[GM] Delete an NPC")
+    async def npc_name_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for NPC name."""
+        npcs = database.load_npcs()
+        choices = []
+
+        for npc in npcs.values():
+            # Show all NPCs if nothing typed yet, otherwise filter
+            if not current or current.lower() in npc.name.lower():
+                choices.append(app_commands.Choice(name=f"🤖 {npc.name}", value=npc.name))
+
+        return choices[:25]  # Discord limit
+
+    async def npc_delete_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for NPC deletion."""
+        npcs = database.load_npcs()
+        choices = []
+
+        for npc in npcs.values():
+            if current.lower() in npc.name.lower():
+                choices.append(app_commands.Choice(name=f"🤖 {npc.name}", value=npc.name))
+
+        return choices[:25]  # Discord limit
+
+    async def npc_vote_target_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for vote target (same as regular /vote)."""
+        choices = []
+
+        # Get the player_actions cog to access get_game_from_channel
+        player_actions_cog = self.bot.get_cog("PlayerActions")
+        if not player_actions_cog:
+            return choices
+
+        # Try to find game from current channel
+        game, day = player_actions_cog.get_game_from_channel(interaction.channel.id)
+
+        if game and game.status == GameStatus.ACTIVE:
+            alive_players = game.get_alive_players()
+
+            # Get player names
+            import random
+            player_choices = []
+            for player_id in alive_players:
+                if player_id < 0:
+                    # NPC
+                    npc = database.get_npc_by_id(player_id)
+                    if npc:
+                        player_choices.append(app_commands.Choice(name=f"🤖 {npc.name}", value=npc.name))
+                else:
+                    # Real player - skip for autocomplete, they can use @mention
+                    pass
+
+            # If <= 20 players, show all NPCs
+            # If > 20, randomly sample 10
+            if len(player_choices) <= 20:
+                choices.extend(player_choices)
+            else:
+                choices.extend(random.sample(player_choices, min(10, len(player_choices))))
+
+        # Always add Abstain and Veto options
+        choices.append(app_commands.Choice(name="Abstain", value="Abstain"))
+        choices.append(app_commands.Choice(name="Veto", value="Veto"))
+
+        # Filter based on what user is currently typing
+        if current:
+            choices = [c for c in choices if current.lower() in c.name.lower()]
+
+        return choices[:25]  # Discord limit
+
+    @app_commands.command(name="npc_delete", description="Delete an NPC")
     @app_commands.describe(name="Name of the NPC to delete")
+    @app_commands.autocomplete(name=npc_delete_autocomplete)
     async def delete_npc(self, interaction: discord.Interaction, name: str):
         """Delete an NPC."""
-        # Check if user has moderator permissions
-        if not permissions.is_moderator(interaction.user):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
-                ephemeral=True
-            )
-            return
 
         # Check if NPC exists
         npc = database.get_npc(name)
@@ -122,17 +182,11 @@ class GMCommands(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="gm_npc_join", description="[GM] Make an NPC join a game")
+    @app_commands.command(name="npc_join", description="Make an NPC join a game")
     @app_commands.describe(npc_name="Name of the NPC")
+    @app_commands.autocomplete(npc_name=npc_name_autocomplete)
     async def npc_join(self, interaction: discord.Interaction, npc_name: str):
         """Make an NPC join a game (use in the game's signup thread)."""
-        # Check if user has moderator permissions
-        if not permissions.is_moderator(interaction.user):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
-                ephemeral=True
-            )
-            return
 
         # Get the player_actions cog to access get_game_from_channel
         player_actions_cog = self.bot.get_cog("PlayerActions")
@@ -243,20 +297,14 @@ class GMCommands(commands.Cog):
                 ephemeral=True
             )
 
-    @app_commands.command(name="gm_npc_vote", description="[GM] Make an NPC cast a vote")
+    @app_commands.command(name="npc_vote", description="Make an NPC cast a vote")
     @app_commands.describe(
         npc_name="Name of the NPC",
         target="The player to vote for, or 'Abstain' or 'Veto'"
     )
+    @app_commands.autocomplete(npc_name=npc_name_autocomplete, target=npc_vote_target_autocomplete)
     async def npc_vote(self, interaction: discord.Interaction, npc_name: str, target: str):
         """Make an NPC cast a vote (use in discussion or votes channel)."""
-        # Check if user has moderator permissions
-        if not permissions.is_moderator(interaction.user):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
-                ephemeral=True
-            )
-            return
 
         # Get the player_actions cog to access get_game_from_channel
         player_actions_cog = self.bot.get_cog("PlayerActions")
@@ -419,6 +467,13 @@ class GMCommands(commands.Cog):
 
             await message.edit(embed=embed)
 
+            # Send public confirmation in discussion channel (if not in votes channel)
+            if interaction.channel.id != votes_channel_id:
+                await interaction.channel.send(
+                    f"🗳️ 🤖 **{npc.name}** has cast their vote! "
+                    f"(Vote tally: {channel.mention})"
+                )
+
             # Confirm vote
             await interaction.response.send_message(
                 f"✅ NPC '{npc_name}' voted for {target_display}!",
@@ -431,20 +486,14 @@ class GMCommands(commands.Cog):
                 ephemeral=True
             )
 
-    @app_commands.command(name="gm_npc_say", description="[GM] Make an NPC send a message")
+    @app_commands.command(name="npc_say", description="Make an NPC send a message")
     @app_commands.describe(
         npc_name="Name of the NPC",
         message="What the NPC should say"
     )
+    @app_commands.autocomplete(npc_name=npc_name_autocomplete)
     async def npc_say(self, interaction: discord.Interaction, npc_name: str, message: str):
         """Make an NPC speak in the current channel."""
-        # Check if user has moderator permissions
-        if not permissions.is_moderator(interaction.user):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
-                ephemeral=True
-            )
-            return
 
         # Get the player_actions cog to access get_game_from_channel
         player_actions_cog = self.bot.get_cog("PlayerActions")
@@ -505,4 +554,4 @@ class GMCommands(commands.Cog):
 
 async def setup(bot):
     """Setup function for cog."""
-    await bot.add_cog(GMCommands(bot))
+    await bot.add_cog(NPCCommands(bot))

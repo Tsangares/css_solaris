@@ -216,6 +216,9 @@ class PlayerActions(commands.Cog):
             )
             return
 
+        # Defer immediately to avoid timeout (vote processing can be slow)
+        await interaction.response.defer(ephemeral=True)
+
         # Parse target
         target_upper = target.upper()
         if target_upper in ["VETO", "ABSTAIN"]:
@@ -232,14 +235,14 @@ class PlayerActions(commands.Cog):
 
                     # Verify target is in game and alive
                     if vote_target not in game.players:
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             "❌ That player is not in this game!",
                             ephemeral=True
                         )
                         return
 
                     if not game.is_player_alive(vote_target):
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             "❌ That player has been eliminated!",
                             ephemeral=True
                         )
@@ -254,7 +257,7 @@ class PlayerActions(commands.Cog):
                 if npc and npc.id in game.players and game.is_player_alive(npc.id):
                     vote_target = npc.id
                 else:
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         "❌ Invalid vote target! Use @mention, NPC name, 'Abstain', or 'Veto'.",
                         ephemeral=True
                     )
@@ -309,38 +312,124 @@ class PlayerActions(commands.Cog):
 
             await message.edit(embed=embed)
 
-            # Confirm vote
+            # Send public confirmation in discussion channel (if not in votes channel)
+            if interaction.channel.id != votes_channel_id:
+                votes_thread = await self.bot.fetch_channel(votes_channel_id)
+                await interaction.channel.send(
+                    f"🗳️ {interaction.user.mention} has cast their vote! "
+                    f"(Vote tally: {votes_thread.mention})"
+                )
+
+            # Confirm vote privately to user
             if isinstance(vote_target, int):
                 # Check if it's an NPC or real player
                 if vote_target < 0:
                     target_npc = database.get_npc_by_id(vote_target)
                     if target_npc:
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             f"✅ Your vote for 🤖 **{target_npc.name}** has been recorded!",
                             ephemeral=True
                         )
                     else:
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             f"✅ Your vote has been recorded!",
                             ephemeral=True
                         )
                 else:
                     target_user = await self.bot.fetch_user(vote_target)
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         f"✅ Your vote for {target_user.mention} has been recorded!",
                         ephemeral=True
                     )
             else:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"✅ Your vote to **{vote_target}** has been recorded!",
                     ephemeral=True
                 )
 
         except Exception as e:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Failed to update vote: {e}",
                 ephemeral=True
             )
+
+    @app_commands.command(name="players", description="List all players in the current game")
+    async def list_players(self, interaction: discord.Interaction):
+        """List all players in the current game with their status."""
+        # Find game from current channel
+        game, day = self.get_game_from_channel(interaction.channel.id)
+
+        if not game:
+            await interaction.response.send_message(
+                "❌ This channel is not a game channel! Use this command in a game thread.",
+                ephemeral=True
+            )
+            return
+
+        # Build player list
+        alive_players = []
+        eliminated_players = []
+
+        for player_id in game.players:
+            is_alive = game.is_player_alive(player_id)
+
+            if player_id < 0:
+                # NPC
+                npc = database.get_npc_by_id(player_id)
+                if npc:
+                    player_name = f"🤖 {npc.name}"
+                else:
+                    player_name = f"🤖 NPC {player_id}"
+            else:
+                # Real user
+                try:
+                    user = await self.bot.fetch_user(player_id)
+                    player_name = user.mention
+                except:
+                    player_name = f"<@{player_id}>"
+
+            if is_alive:
+                alive_players.append(player_name)
+            else:
+                eliminated_players.append(player_name)
+
+        # Build embed
+        embed = discord.Embed(
+            title=f"👥 Players - {game.name}",
+            color=discord.Color.blue()
+        )
+
+        if game.status == GameStatus.SIGNUP:
+            embed.description = "Game is in signup phase"
+            embed.add_field(
+                name=f"Signed Up ({len(game.players)})",
+                value="\n".join(alive_players) if alive_players else "None yet",
+                inline=False
+            )
+        elif game.status == GameStatus.ACTIVE:
+            embed.description = f"Day {game.current_day}"
+            embed.add_field(
+                name=f"✅ Alive ({len(alive_players)})",
+                value="\n".join(alive_players) if alive_players else "None",
+                inline=False
+            )
+            if eliminated_players:
+                embed.add_field(
+                    name=f"💀 Eliminated ({len(eliminated_players)})",
+                    value="\n".join(eliminated_players),
+                    inline=False
+                )
+        else:
+            embed.description = "Game has ended"
+            embed.add_field(
+                name=f"All Players ({len(game.players)})",
+                value="\n".join(alive_players + eliminated_players),
+                inline=False
+            )
+
+        embed.set_footer(text=f"Game: {game.name}")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot):

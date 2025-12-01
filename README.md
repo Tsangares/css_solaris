@@ -30,6 +30,7 @@ A Discord bot for running social deduction games similar to Mafia, Werewolf, Sec
 |---------|-------------|
 | `/new_game <name>` | Create a new game (creates a forum post in Game Lobby) |
 | `/join` | Join a game during signup (use in the game's signup thread) |
+| `/players` | List all players in the current game (alive and eliminated) |
 | `/vote @player` | Vote to eliminate a player |
 | `/vote Abstain` | Vote to eliminate nobody |
 | `/vote Veto` | Don't participate in voting |
@@ -41,18 +42,18 @@ A Discord bot for running social deduction games similar to Mafia, Werewolf, Sec
 | `/start` | Start a game (use in signup thread, requires moderator or game creator) |
 | `/end_day <name>` | End current day and count votes (requires moderator or game creator) |
 
-### Game Master Testing Commands
+### NPC Commands
 
-These commands are for testing games solo with NPC (bot-controlled) players:
+These commands are available to all users for creating and controlling NPC (bot-controlled) players:
 
 | Command | Description |
 |---------|-------------|
-| `/gm_npc_create <name> <persona>` | Create an NPC player for testing |
-| `/gm_npc_list` | List all NPCs |
-| `/gm_npc_delete <name>` | Delete an NPC |
-| `/gm_npc_join <npc_name>` | Make an NPC join a game (use in signup thread) |
-| `/gm_npc_vote <npc_name> <target>` | Make an NPC cast a vote (use in discussion/votes thread) |
-| `/gm_npc_say <npc_name> <message>` | Make an NPC send a message in the discussion |
+| `/npc_create <name> <persona>` | Create an NPC player for testing |
+| `/npc_list` | List all NPCs |
+| `/npc_delete <name>` | Delete an NPC |
+| `/npc_join <npc_name>` | Make an NPC join a game (use in signup thread) |
+| `/npc_vote <npc_name> <target>` | Make an NPC cast a vote (use in discussion/votes thread) |
+| `/npc_say <npc_name> <message>` | Make an NPC send a message in the discussion |
 
 ## Setup
 
@@ -163,10 +164,17 @@ If you prefer to manually grant permissions:
 - ✅ Creates "CSS Solaris Moderator" role
 - ✅ Creates "Game Lobby" forum channel
 - ✅ Creates "Game Discussions" forum channel
-- ✅ Creates "Game Voting" forum channel
+- ✅ Creates "Game Voting" forum channel (hidden from @everyone, mods only)
 - ✅ Verifies all permissions are correct
 
 After setup, assign the "CSS Solaris Moderator" role to users who should be able to start/manage games!
+
+**Note:** The Game Voting forum is automatically set to be hidden from regular players and is read-only for moderators:
+- **@everyone**: Cannot see the channel
+- **Moderators**: Can view but cannot send messages (read-only)
+- **Bot**: Can view, post, and manage threads
+
+This ensures vote tracking remains secret and only the bot can update vote tallies.
 
 ## Usage
 
@@ -200,7 +208,7 @@ After setup, assign the "CSS Solaris Moderator" role to users who should be able
 
 4. Repeat until game ends
 
-**Note:** The voting channel is hidden from regular players. All discussion and voting happens in the discussion thread, while mods can see the vote tally in the hidden voting channel.
+**Note:** The voting channel is hidden from regular players and read-only for mods. All discussion and voting happens in the discussion thread. When someone votes, a public confirmation appears with a link to the vote tally (only mods can access the link).
 
 ### Testing with NPCs
 
@@ -208,18 +216,18 @@ For solo testing before running a real game:
 
 1. Create some test NPCs:
    ```
-   /gm_npc_create Alice Clever strategist, always thinking ahead
-   /gm_npc_create Bob Quiet observer who rarely speaks
-   /gm_npc_create Charlie Aggressive player, quick to accuse
+   /npc_create Alice Clever strategist, always thinking ahead
+   /npc_create Bob Quiet observer who rarely speaks
+   /npc_create Charlie Aggressive player, quick to accuse
    ```
 
 2. Create a test game and have NPCs join (run these in the signup thread):
    ```
    /new_game TestGame
    (Now go into the TestGame signup thread)
-   /gm_npc_join Alice
-   /gm_npc_join Bob
-   /gm_npc_join Charlie
+   /npc_join Alice
+   /npc_join Bob
+   /npc_join Charlie
    /join (join yourself too!)
    ```
 
@@ -230,10 +238,10 @@ For solo testing before running a real game:
 
    Then in the discussion thread:
    ```
-   /gm_npc_say Alice I think Bob is acting suspicious...
-   /gm_npc_say Bob That's ridiculous! I'm innocent!
-   /gm_npc_vote Alice Bob
-   /gm_npc_vote Charlie Abstain
+   /npc_say Alice I think Bob is acting suspicious...
+   /npc_say Bob That's ridiculous! I'm innocent!
+   /npc_vote Alice Bob
+   /npc_vote Charlie Abstain
    /vote Alice (your vote)
    /end_day TestGame
    ```
@@ -241,10 +249,12 @@ For solo testing before running a real game:
 4. NPCs appear alongside real players in all game displays!
 
 **Key Features:**
-- `/gm_npc_say` makes NPCs speak in character with their persona
-- `/gm_npc_vote` works from any game channel (auto-detects the game)
+- `/npc_say` makes NPCs speak in character with their persona (autocomplete for NPC names)
+- `/npc_vote` has dropdown autocomplete for both NPC names and vote targets
+- `/npc_join` and `/npc_delete` also have autocomplete for easy NPC selection
 - NPCs can be voted for by name using `/vote Alice` (autocomplete supported)
 - Vote tracking is hidden from players, visible only to mods
+- **Anyone can create and control NPCs** - no special permissions required!
 
 ## Project Structure
 
@@ -253,9 +263,9 @@ css_solaris/
 ├── bot.py                  # Main bot entry point
 ├── cogs/                   # Command modules
 │   ├── game_management.py  # Game creation/starting
-│   ├── player_actions.py   # Player commands (join, vote)
+│   ├── player_actions.py   # Player commands (join, vote, players)
 │   ├── moderator.py        # Admin commands (setup, end_day, invite)
-│   └── gm_commands.py      # GM NPC testing commands
+│   └── npc_commands.py     # NPC commands (available to all users)
 ├── models/                 # Data structures
 │   ├── game.py             # Game class
 │   ├── npc.py              # NPC class for testing

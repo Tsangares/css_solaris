@@ -167,7 +167,7 @@ class Moderator(commands.Cog):
                 name="Next Steps",
                 value=f"1. Assign the {mod_role.mention} role to users who should moderate games\n"
                       f"2. Use `/new_game` to create your first game!\n"
-                      f"3. Use `/gm_npc_create` to create test NPCs (moderators only)",
+                      f"3. Use `/npc_create` to create test NPCs (available to everyone)",
                 inline=False
             )
 

@@ -74,7 +74,7 @@ async def load_cogs():
         'cogs.game_management',
         'cogs.player_actions',
         'cogs.moderator',
-        'cogs.gm_commands'
+        'cogs.npc_commands'
     ]
 
     for cog in cogs:

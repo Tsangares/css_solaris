@@ -91,12 +91,13 @@ async def get_or_create_game_forums(
             send_messages=False
         )
 
-        # Allow moderators to view
+        # Allow moderators to view (but not send messages - read-only)
         if mod_role:
             overwrites[mod_role] = discord.PermissionOverwrite(
                 view_channel=True,
-                send_messages=True,
-                create_public_threads=True
+                send_messages=False,
+                send_messages_in_threads=False,
+                create_public_threads=False
             )
 
         # Allow bot to view and post
@@ -124,12 +125,13 @@ async def get_or_create_game_forums(
                 send_messages=False
             )
 
-            # Allow moderators to view
+            # Allow moderators to view (but not send messages - read-only)
             if mod_role:
                 overwrites[mod_role] = discord.PermissionOverwrite(
                     view_channel=True,
-                    send_messages=True,
-                    create_public_threads=True
+                    send_messages=False,
+                    send_messages_in_threads=False,
+                    create_public_threads=False
                 )
 
             # Allow bot to view and post
