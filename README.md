@@ -4,22 +4,32 @@ A Discord bot for running social deduction games similar to Mafia, Werewolf, Sec
 
 ## Features
 
-- Create and manage multiple concurrent games
+- Create and manage multiple concurrent games using Discord Forum Channels
+- Automatic forum channel creation (Game Lobby, Discussions, Voting)
 - Day/night cycle gameplay
 - Vote tracking with real-time updates
 - Support for Abstain and Veto votes
 - Automatic vote counting and elimination
-- Clean, organized game channels
-- Role system (planned for future)
+- Clean, organized forum threads for each game and day
+- NPC system for solo testing with bot-controlled players
+- Role-based moderator system
+- Easy setup with `/setup` command
 
 ## Commands
+
+### Setup Commands
+
+| Command | Description |
+|---------|-------------|
+| `/setup` | Initial server setup - creates moderator role and forum channels (Admin only) |
+| `/invite` | Get the bot invite link with all required permissions |
 
 ### Player Commands
 
 | Command | Description |
 |---------|-------------|
-| `/new_game <name>` | Create a new game |
-| `/join` | Join a game during signup |
+| `/new_game <name>` | Create a new game (creates a forum post in Game Lobby) |
+| `/join` | Join a game during signup (use in the game's signup thread) |
 | `/vote @player` | Vote to eliminate a player |
 | `/vote Abstain` | Vote to eliminate nobody |
 | `/vote Veto` | Don't participate in voting |
@@ -28,8 +38,21 @@ A Discord bot for running social deduction games similar to Mafia, Werewolf, Sec
 
 | Command | Description |
 |---------|-------------|
-| `/start <name>` | Start a game (requires moderator or game creator) |
+| `/start` | Start a game (use in signup thread, requires moderator or game creator) |
 | `/end_day <name>` | End current day and count votes (requires moderator or game creator) |
+
+### Game Master Testing Commands
+
+These commands are for testing games solo with NPC (bot-controlled) players:
+
+| Command | Description |
+|---------|-------------|
+| `/gm_npc_create <name> <persona>` | Create an NPC player for testing |
+| `/gm_npc_list` | List all NPCs |
+| `/gm_npc_delete <name>` | Delete an NPC |
+| `/gm_npc_join <npc_name>` | Make an NPC join a game (use in signup thread) |
+| `/gm_npc_vote <npc_name> <target>` | Make an NPC cast a vote (use in discussion/votes thread) |
+| `/gm_npc_say <npc_name> <message>` | Make an NPC send a message in the discussion |
 
 ## Setup
 
@@ -44,20 +67,16 @@ A Discord bot for running social deduction games similar to Mafia, Werewolf, Sec
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
 2. Click "New Application" and give it a name
 3. Go to the "Bot" section and click "Add Bot"
-4. Under "Privileged Gateway Intents", enable:
-   - Server Members Intent
-   - Message Content Intent
+4. **IMPORTANT: Enable Privileged Intents** - Under "Privileged Gateway Intents", enable:
+   - ✅ **Server Members Intent** (Required!)
+   - ✅ **Presence Intent** (Optional but recommended)
+   - ❌ Message Content Intent (Not needed)
+
+   **Without Server Members Intent enabled, the bot will not start!**
+
 5. Click "Reset Token" to get your bot token (save this for later)
-6. Go to "OAuth2" > "URL Generator"
-7. Select scopes: `bot`, `applications.commands`
-8. Select bot permissions:
-   - Manage Channels
-   - Send Messages
-   - Embed Links
-   - Manage Messages
-   - Read Message History
-   - Use Slash Commands
-9. Copy the generated URL and open it in your browser to invite the bot to your server
+
+**Note:** Don't worry about manually creating an invite link yet - the bot will generate one with all the correct permissions after setup!
 
 ### 2. Install the Bot
 
@@ -103,10 +122,51 @@ python bot.py
 
 You should see:
 ```
-{BotName} has connected to Discord!
-Bot is in X guild(s)
-Synced commands to guild {GUILD_ID}
+==================================================
+✅ CSS Solaris has connected to Discord!
+📊 Bot is in X guild(s)
+   - YourServerName (ID: ...)
+✅ Synced commands to guild {GUILD_ID}
+🚀 Bot is ready! Use /setup to get started.
+==================================================
 ```
+
+### 5. Invite and Setup
+
+#### Option A: First Time Setup (Recommended)
+
+If the bot is already in your test server but doesn't have permissions:
+
+1. In Discord, run `/invite` to get the bot invite link with all required permissions
+2. Kick the current bot from your server
+3. Use the invite link to re-add the bot with proper permissions
+4. Run `/setup` to create forum channels and moderator role
+
+#### Option B: Manual Permissions
+
+If you prefer to manually grant permissions:
+
+1. Go to Server Settings → Roles
+2. Find your bot's role (usually named "CSS Solaris")
+3. Enable these permissions:
+   - ✅ Manage Roles
+   - ✅ Manage Channels
+   - ✅ Manage Threads
+   - ✅ Create Public Threads
+   - ✅ Send Messages in Threads
+   - ✅ Send Messages
+   - ✅ Embed Links
+4. Run `/setup` in Discord
+
+#### What `/setup` Does:
+
+- ✅ Creates "CSS Solaris Moderator" role
+- ✅ Creates "Game Lobby" forum channel
+- ✅ Creates "Game Discussions" forum channel
+- ✅ Creates "Game Voting" forum channel
+- ✅ Verifies all permissions are correct
+
+After setup, assign the "CSS Solaris Moderator" role to users who should be able to start/manage games!
 
 ## Usage
 
@@ -114,47 +174,101 @@ Synced commands to guild {GUILD_ID}
 
 1. Use `/new_game <game_name>` to create a new game
    - Example: `/new_game Jacks`
+   - This creates a forum post in the "Game Lobby" forum
 
 2. Players join using `/join` in the signup thread
+   - NPCs will appear with a 🤖 emoji prefix
 
-3. Moderator starts the game with `/start <game_name>`
-   - Example: `/start Jacks`
-   - This creates Day 1 voting and discussion channels
+3. Moderator starts the game with `/start` (in the signup thread)
+   - This creates Day 1 threads in both "Game Discussions" and "Game Voting" forums
 
 ### Playing a Day
 
-1. Players discuss in the discussion channel
-2. Players vote in the voting channel using `/vote @player`
+1. Players discuss in the discussion thread
+2. Players vote **in the discussion thread** using `/vote @player` or `/vote NPCName`
+   - Vote autocomplete shows available players and NPCs
    - Can change votes by voting again
    - Can `/vote Abstain` to vote for no elimination
    - Can `/vote Veto` to not participate
+   - Vote tallies are tracked in a hidden channel (mods only)
 
 3. Moderator ends the day with `/end_day <game_name>`
    - Bot counts votes and announces results
    - Player with most votes is eliminated (ties = no elimination)
-   - Creates Day 2 channels automatically
+   - Creates Day 2 threads automatically
+   - Old threads are locked and archived
 
 4. Repeat until game ends
+
+**Note:** The voting channel is hidden from regular players. All discussion and voting happens in the discussion thread, while mods can see the vote tally in the hidden voting channel.
+
+### Testing with NPCs
+
+For solo testing before running a real game:
+
+1. Create some test NPCs:
+   ```
+   /gm_npc_create Alice Clever strategist, always thinking ahead
+   /gm_npc_create Bob Quiet observer who rarely speaks
+   /gm_npc_create Charlie Aggressive player, quick to accuse
+   ```
+
+2. Create a test game and have NPCs join (run these in the signup thread):
+   ```
+   /new_game TestGame
+   (Now go into the TestGame signup thread)
+   /gm_npc_join Alice
+   /gm_npc_join Bob
+   /gm_npc_join Charlie
+   /join (join yourself too!)
+   ```
+
+3. Start and play (in the signup thread):
+   ```
+   /start
+   ```
+
+   Then in the discussion thread:
+   ```
+   /gm_npc_say Alice I think Bob is acting suspicious...
+   /gm_npc_say Bob That's ridiculous! I'm innocent!
+   /gm_npc_vote Alice Bob
+   /gm_npc_vote Charlie Abstain
+   /vote Alice (your vote)
+   /end_day TestGame
+   ```
+
+4. NPCs appear alongside real players in all game displays!
+
+**Key Features:**
+- `/gm_npc_say` makes NPCs speak in character with their persona
+- `/gm_npc_vote` works from any game channel (auto-detects the game)
+- NPCs can be voted for by name using `/vote Alice` (autocomplete supported)
+- Vote tracking is hidden from players, visible only to mods
 
 ## Project Structure
 
 ```
 css_solaris/
-├── bot.py                 # Main bot entry point
-├── cogs/                  # Command modules
-│   ├── game_management.py # Game creation/starting
-│   ├── player_actions.py  # Player commands (join, vote)
-│   └── moderator.py       # Admin commands (end_day)
-├── models/                # Data structures
-│   ├── game.py           # Game class
-│   ├── player.py         # Player class
-│   └── role.py           # Role classes (future)
-├── utils/                 # Helper functions
-│   ├── database.py       # Database operations
-│   ├── game_logic.py     # Vote counting logic
-│   └── permissions.py    # Permission checks
-└── data/                  # Game state storage
-    └── games.json        # Created at runtime
+├── bot.py                  # Main bot entry point
+├── cogs/                   # Command modules
+│   ├── game_management.py  # Game creation/starting
+│   ├── player_actions.py   # Player commands (join, vote)
+│   ├── moderator.py        # Admin commands (setup, end_day, invite)
+│   └── gm_commands.py      # GM NPC testing commands
+├── models/                 # Data structures
+│   ├── game.py             # Game class
+│   ├── npc.py              # NPC class for testing
+│   └── role.py             # Role classes (future)
+├── utils/                  # Helper functions
+│   ├── database.py         # Database operations (games & NPCs)
+│   ├── game_logic.py       # Vote counting logic
+│   ├── permissions.py      # Permission checks
+│   ├── forum_manager.py    # Forum channel creation
+│   └── bot_utils.py        # Invite link generation & permission checks
+└── data/                   # Game state storage
+    ├── games.json          # Created at runtime
+    └── npcs.json           # Created at runtime
 ```
 
 ## Vote Counting Rules
@@ -194,23 +308,43 @@ To test the bot:
 
 ## Troubleshooting
 
+**"PrivilegedIntentsRequired" error when starting bot:**
+This is the most common issue! You need to enable Server Members Intent:
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Select your application
+3. Go to "Bot" section
+4. Scroll down to "Privileged Gateway Intents"
+5. Enable **Server Members Intent** toggle
+6. Save changes
+7. Restart your bot
+
 **Bot doesn't respond to commands:**
 - Make sure the bot is online (check Discord)
-- Verify bot has correct permissions
-- Check that intents are enabled in Developer Portal
+- Verify bot has correct permissions (run `/invite` to get proper invite link)
+- Check that Server Members Intent is enabled in Developer Portal
 - Wait a few minutes for commands to sync (or specify GUILD_ID for instant sync)
 
 **"Missing Permissions" error:**
-- Ensure bot has required permissions (see Setup step 1.8)
-- Check channel-specific permissions
+- Run `/setup` - it will tell you exactly which permissions are missing
+- Run `/invite` to get a bot invite link with all required permissions
+- Option: Kick and re-invite the bot using the link from `/invite`
+- Option: Manually grant permissions in Server Settings → Roles
+
+**"Owner ID=None" or permission check failures:**
+- Make sure **Server Members Intent** is enabled in Discord Developer Portal
+- Restart the bot after enabling intents
 
 **Commands not appearing:**
 - Wait up to 1 hour for global command sync
 - Or specify GUILD_ID in .env for instant sync during development
 
 **Game state lost on restart:**
-- Check that `data/games.json` exists and is readable
+- Check that `data/games.json` and `data/npcs.json` exist and are readable
 - Verify write permissions in data directory
+
+**Forum channels not being created:**
+- Make sure the bot has "Manage Channels" permission
+- Run `/setup` which will create the required forums automatically
 
 ## License
 

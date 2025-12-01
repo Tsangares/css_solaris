@@ -8,7 +8,8 @@ from discord import app_commands
 from discord.ext import commands
 from models.game import Game, GameStatus
 from utils import database, permissions, game_logic
-from typing import Dict
+from typing import Dict, List
+import random
 
 
 class PlayerActions(commands.Cog):
@@ -33,8 +34,9 @@ class PlayerActions(commands.Cog):
                     return game, day
                 if channels.get("discussion_channel_id") == channel_id:
                     return game, day
-                if game.signup_thread_id == channel_id:
-                    return game, 0
+            # Handle potential type mismatch (int vs string)
+            if int(game.signup_thread_id) == int(channel_id):
+                return game, 0
         return None, None
 
     @app_commands.command(name="join", description="Join a CSS Solaris game")
@@ -44,10 +46,30 @@ class PlayerActions(commands.Cog):
         game, day = self.get_game_from_channel(interaction.channel.id)
 
         if not game:
-            await interaction.response.send_message(
-                "❌ This channel is not a game signup thread!",
-                ephemeral=True
-            )
+            # Find all games in signup phase and provide helpful information
+            all_games = database.load_games()
+            signup_games = [g for g in all_games.values() if g.status == GameStatus.SIGNUP]
+
+            if len(signup_games) == 0:
+                await interaction.response.send_message(
+                    "❌ This channel is not a game signup thread!\n\n"
+                    "There are currently no games available to join.",
+                    ephemeral=True
+                )
+            elif len(signup_games) == 1:
+                signup_game = signup_games[0]
+                await interaction.response.send_message(
+                    "❌ This channel is not a game signup thread!\n\n"
+                    f"To join **{signup_game.name}**, use `/join` in <#{signup_game.signup_thread_id}>",
+                    ephemeral=True
+                )
+            else:
+                game_list = "\n".join([f"• **{g.name}**: <#{g.signup_thread_id}>" for g in signup_games])
+                await interaction.response.send_message(
+                    "❌ This channel is not a game signup thread!\n\n"
+                    f"Available games to join:\n{game_list}",
+                    ephemeral=True
+                )
             return
 
         # Check if game is in signup phase
@@ -73,8 +95,20 @@ class PlayerActions(commands.Cog):
         # Update signup message
         player_list = []
         for player_id in game.players:
-            user = await self.bot.fetch_user(player_id)
-            player_list.append(f"• {user.mention}")
+            if player_id < 0:
+                # NPC player
+                npc = database.get_npc_by_id(player_id)
+                if npc:
+                    player_list.append(f"• 🤖 {npc.name}")
+                else:
+                    player_list.append(f"• 🤖 NPC {player_id}")
+            else:
+                # Real user
+                try:
+                    user = await self.bot.fetch_user(player_id)
+                    player_list.append(f"• {user.mention}")
+                except:
+                    player_list.append(f"• <@{player_id}>")
 
         embed = discord.Embed(
             title=f"🎮 {game.name} - Signup",
@@ -95,8 +129,57 @@ class PlayerActions(commands.Cog):
             embed=embed
         )
 
+    async def vote_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> List[app_commands.Choice[str]]:
+        """Autocomplete for vote target."""
+        choices = []
+
+        # Try to find game from current channel
+        game, day = self.get_game_from_channel(interaction.channel.id)
+
+        if game and game.status == GameStatus.ACTIVE:
+            alive_players = game.get_alive_players()
+
+            # Get player names
+            player_choices = []
+            for player_id in alive_players:
+                if player_id < 0:
+                    # NPC
+                    npc = database.get_npc_by_id(player_id)
+                    if npc:
+                        player_choices.append(app_commands.Choice(name=f"🤖 {npc.name}", value=npc.name))
+                else:
+                    # Real player - we'll use their name if we can fetch it
+                    try:
+                        # For autocomplete, we can't await fetch_user, so we'll just use their ID
+                        # The user can still use @mention which will work
+                        pass  # Skip real players for autocomplete for now, they can use @mention
+                    except:
+                        pass
+
+            # If <= 20 players, show all NPCs
+            # If > 20, randomly sample 10
+            if len(player_choices) <= 20:
+                choices.extend(player_choices)
+            else:
+                choices.extend(random.sample(player_choices, min(10, len(player_choices))))
+
+        # Always add Abstain and Veto options
+        choices.append(app_commands.Choice(name="Abstain", value="Abstain"))
+        choices.append(app_commands.Choice(name="Veto", value="Veto"))
+
+        # Filter based on what user is currently typing
+        if current:
+            choices = [c for c in choices if current.lower() in c.name.lower()]
+
+        return choices[:25]  # Discord limit is 25 choices
+
     @app_commands.command(name="vote", description="Vote for a player or Abstain/Veto")
     @app_commands.describe(target="The player to vote for, or 'Abstain' or 'Veto'")
+    @app_commands.autocomplete(target=vote_autocomplete)
     async def vote(self, interaction: discord.Interaction, target: str):
         """Cast or update a vote."""
         # Find game from current channel
@@ -104,7 +187,7 @@ class PlayerActions(commands.Cog):
 
         if not game:
             await interaction.response.send_message(
-                "❌ This channel is not a game voting channel!",
+                "❌ This channel is not a game channel! Use `/vote` in the discussion or votes thread.",
                 ephemeral=True
             )
             return
@@ -138,7 +221,9 @@ class PlayerActions(commands.Cog):
         if target_upper in ["VETO", "ABSTAIN"]:
             vote_target = target_upper
         else:
-            # Try to parse mention
+            vote_target = None
+
+            # Try to parse mention first
             # Format: <@USER_ID> or <@!USER_ID>
             if target.startswith("<@") and target.endswith(">"):
                 target_id_str = target[2:-1].replace("!", "")
@@ -161,17 +246,19 @@ class PlayerActions(commands.Cog):
                         return
 
                 except ValueError:
+                    pass  # Not a valid mention, will try NPC name next
+
+            # If not a mention, try NPC name
+            if vote_target is None:
+                npc = database.get_npc(target)
+                if npc and npc.id in game.players and game.is_player_alive(npc.id):
+                    vote_target = npc.id
+                else:
                     await interaction.response.send_message(
-                        "❌ Invalid vote target! Use @mention, 'Abstain', or 'Veto'.",
+                        "❌ Invalid vote target! Use @mention, NPC name, 'Abstain', or 'Veto'.",
                         ephemeral=True
                     )
                     return
-            else:
-                await interaction.response.send_message(
-                    "❌ Invalid vote target! Use @mention, 'Abstain', or 'Veto'.",
-                    ephemeral=True
-                )
-                return
 
         # Initialize votes structure if needed
         if game.name not in self.votes:
@@ -190,14 +277,23 @@ class PlayerActions(commands.Cog):
             channel = await self.bot.fetch_channel(votes_channel_id)
             message = await channel.fetch_message(votes_message_id)
 
-            # Get user names
+            # Get user/NPC names
             user_names = {}
             for player_id in game.get_alive_players():
-                try:
-                    user = await self.bot.fetch_user(player_id)
-                    user_names[player_id] = user.name
-                except:
-                    user_names[player_id] = f"User {player_id}"
+                if player_id < 0:
+                    # NPC
+                    npc = database.get_npc_by_id(player_id)
+                    if npc:
+                        user_names[player_id] = f"🤖 {npc.name}"
+                    else:
+                        user_names[player_id] = f"🤖 NPC {player_id}"
+                else:
+                    # Real user
+                    try:
+                        user = await self.bot.fetch_user(player_id)
+                        user_names[player_id] = user.name
+                    except:
+                        user_names[player_id] = f"User {player_id}"
 
             # Format vote message
             vote_display = game_logic.format_vote_message(
@@ -215,11 +311,25 @@ class PlayerActions(commands.Cog):
 
             # Confirm vote
             if isinstance(vote_target, int):
-                target_user = await self.bot.fetch_user(vote_target)
-                await interaction.response.send_message(
-                    f"✅ Your vote for {target_user.mention} has been recorded!",
-                    ephemeral=True
-                )
+                # Check if it's an NPC or real player
+                if vote_target < 0:
+                    target_npc = database.get_npc_by_id(vote_target)
+                    if target_npc:
+                        await interaction.response.send_message(
+                            f"✅ Your vote for 🤖 **{target_npc.name}** has been recorded!",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.response.send_message(
+                            f"✅ Your vote has been recorded!",
+                            ephemeral=True
+                        )
+                else:
+                    target_user = await self.bot.fetch_user(vote_target)
+                    await interaction.response.send_message(
+                        f"✅ Your vote for {target_user.mention} has been recorded!",
+                        ephemeral=True
+                    )
             else:
                 await interaction.response.send_message(
                     f"✅ Your vote to **{vote_target}** has been recorded!",

@@ -1,0 +1,508 @@
+"""
+Game Master Commands Cog
+Handles NPC management for testing purposes.
+"""
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+from models.game import GameStatus
+from models.npc import NPC
+from utils import database, permissions
+from typing import Dict
+
+
+class GMCommands(commands.Cog):
+    """Cog for Game Master commands to control NPCs."""
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    @app_commands.command(name="gm_npc_create", description="[GM] Create an NPC player for testing")
+    @app_commands.describe(
+        name="Name of the NPC",
+        persona="Character personality/description (e.g., 'Aggressive and suspicious')"
+    )
+    async def create_npc(self, interaction: discord.Interaction, name: str, persona: str):
+        """Create a new NPC player."""
+        # Check if user has moderator permissions
+        if not permissions.is_moderator(interaction.user):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC already exists
+        if database.npc_exists(name):
+            await interaction.response.send_message(
+                f"❌ An NPC named '{name}' already exists!",
+                ephemeral=True
+            )
+            return
+
+        # Create NPC
+        npc = NPC(name=name, profile=persona)
+        database.save_npc(npc)
+
+        embed = discord.Embed(
+            title=f"🤖 NPC Created: {name}",
+            description=f"**Persona:** {npc.profile}\n**ID:** {npc.id}",
+            color=discord.Color.blue()
+        )
+
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="gm_npc_list", description="[GM] List all NPCs")
+    async def list_npcs(self, interaction: discord.Interaction):
+        """List all NPCs."""
+        # Check if user has moderator permissions
+        if not permissions.is_moderator(interaction.user):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
+            return
+
+        npcs = database.load_npcs()
+
+        if not npcs:
+            await interaction.response.send_message(
+                "📋 No NPCs have been created yet.",
+                ephemeral=True
+            )
+            return
+
+        # Build NPC list
+        npc_list = []
+        for npc in npcs.values():
+            npc_list.append(f"**{npc.name}** (ID: {npc.id})\n└ *Persona:* {npc.profile}")
+
+        embed = discord.Embed(
+            title="🤖 NPCs",
+            description="\n\n".join(npc_list),
+            color=discord.Color.blue()
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="gm_npc_delete", description="[GM] Delete an NPC")
+    @app_commands.describe(name="Name of the NPC to delete")
+    async def delete_npc(self, interaction: discord.Interaction, name: str):
+        """Delete an NPC."""
+        # Check if user has moderator permissions
+        if not permissions.is_moderator(interaction.user):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC exists
+        npc = database.get_npc(name)
+        if not npc:
+            await interaction.response.send_message(
+                f"❌ NPC '{name}' not found!",
+                ephemeral=True
+            )
+            return
+
+        # Remove NPC from any games they're in
+        games = database.load_games()
+        for game in games.values():
+            if npc.id in game.players:
+                game.remove_player(npc.id)
+                database.save_game(game)
+
+        # Delete NPC
+        database.delete_npc(name)
+
+        await interaction.response.send_message(
+            f"✅ NPC '{name}' has been deleted!",
+            ephemeral=True
+        )
+
+    @app_commands.command(name="gm_npc_join", description="[GM] Make an NPC join a game")
+    @app_commands.describe(npc_name="Name of the NPC")
+    async def npc_join(self, interaction: discord.Interaction, npc_name: str):
+        """Make an NPC join a game (use in the game's signup thread)."""
+        # Check if user has moderator permissions
+        if not permissions.is_moderator(interaction.user):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
+            return
+
+        # Get the player_actions cog to access get_game_from_channel
+        player_actions_cog = self.bot.get_cog("PlayerActions")
+        if not player_actions_cog:
+            await interaction.response.send_message(
+                "❌ PlayerActions cog not loaded!",
+                ephemeral=True
+            )
+            return
+
+        # Find game from current channel
+        game, day = player_actions_cog.get_game_from_channel(interaction.channel.id)
+
+        if not game:
+            # Debug: show what channel ID we're checking
+            all_games = database.load_games()
+            game_info = []
+            for g in all_games.values():
+                if g.status == GameStatus.SIGNUP:
+                    game_info.append(f"• **{g.name}**: Thread ID {g.signup_thread_id}")
+
+            debug_msg = f"❌ This channel is not a game signup thread!\n\n"
+            debug_msg += f"Current channel ID: {interaction.channel.id}\n\n"
+            if game_info:
+                debug_msg += "Available signup threads:\n" + "\n".join(game_info)
+            else:
+                debug_msg += "No games in signup phase."
+
+            await interaction.response.send_message(debug_msg, ephemeral=True)
+            return
+
+        # Check if game is in signup phase
+        if game.status != GameStatus.SIGNUP:
+            await interaction.response.send_message(
+                f"❌ Game '{game_name}' has already started or ended!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC exists
+        npc = database.get_npc(npc_name)
+        if not npc:
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' not found!",
+                ephemeral=True
+            )
+            return
+
+        # Check if already joined
+        if npc.id in game.players:
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' has already joined this game!",
+                ephemeral=True
+            )
+            return
+
+        # Add NPC to game
+        game.add_player(npc.id)
+        database.save_game(game)
+
+        # Update signup message in the signup thread
+        try:
+            channel = await self.bot.fetch_channel(game.signup_thread_id)
+
+            # Build player list
+            player_list = []
+            for player_id in game.players:
+                if player_id < 0:
+                    # NPC
+                    player_npc = database.get_npc_by_id(player_id)
+                    if player_npc:
+                        player_list.append(f"• 🤖 {player_npc.name}")
+                else:
+                    # Real user
+                    try:
+                        user = await self.bot.fetch_user(player_id)
+                        player_list.append(f"• {user.mention}")
+                    except:
+                        player_list.append(f"• <@{player_id}>")
+
+            embed = discord.Embed(
+                title=f"🎮 {game.name} - Signup",
+                description=f"A CSS Solaris game created by <@{game.creator_id}>!\n\n"
+                           f"Use `/join` to join the game.\n"
+                           f"Once enough players have joined, a moderator can use `/start {game.name}` to begin!",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name=f"Players ({len(game.players)})",
+                value="\n".join(player_list) if player_list else "None yet",
+                inline=False
+            )
+            embed.set_footer(text=f"Game: {game.name}")
+
+            await channel.send(
+                f"✅ 🤖 **{npc.name}** (NPC) has joined the game!",
+                embed=embed
+            )
+
+            await interaction.response.send_message(
+                f"✅ NPC '{npc_name}' joined game '{game.name}'!",
+                ephemeral=True
+            )
+
+        except Exception as e:
+            await interaction.response.send_message(
+                f"⚠️ NPC joined but failed to update signup message: {e}",
+                ephemeral=True
+            )
+
+    @app_commands.command(name="gm_npc_vote", description="[GM] Make an NPC cast a vote")
+    @app_commands.describe(
+        npc_name="Name of the NPC",
+        target="The player to vote for, or 'Abstain' or 'Veto'"
+    )
+    async def npc_vote(self, interaction: discord.Interaction, npc_name: str, target: str):
+        """Make an NPC cast a vote (use in discussion or votes channel)."""
+        # Check if user has moderator permissions
+        if not permissions.is_moderator(interaction.user):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
+            return
+
+        # Get the player_actions cog to access get_game_from_channel
+        player_actions_cog = self.bot.get_cog("PlayerActions")
+        if not player_actions_cog:
+            await interaction.response.send_message(
+                "❌ PlayerActions cog not loaded!",
+                ephemeral=True
+            )
+            return
+
+        # Find game from current channel
+        game, day = player_actions_cog.get_game_from_channel(interaction.channel.id)
+
+        if not game:
+            await interaction.response.send_message(
+                "❌ This channel is not a game channel! Use this command in the discussion or votes thread.",
+                ephemeral=True
+            )
+            return
+
+        # Check if game is active
+        if game.status != GameStatus.ACTIVE:
+            await interaction.response.send_message(
+                f"❌ Game '{game.name}' is not currently active!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC exists
+        npc = database.get_npc(npc_name)
+        if not npc:
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' not found!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC is in the game
+        if npc.id not in game.players:
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' is not in this game!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC is alive
+        if not game.is_player_alive(npc.id):
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' has been eliminated!",
+                ephemeral=True
+            )
+            return
+
+        # Parse target
+        target_upper = target.upper()
+        if target_upper in ["VETO", "ABSTAIN"]:
+            vote_target = target_upper
+            target_display = f"**{vote_target}**"
+        else:
+            # Try to parse mention or NPC name
+            vote_target = None
+            target_display = None
+
+            # Check if it's a mention
+            if target.startswith("<@") and target.endswith(">"):
+                target_id_str = target[2:-1].replace("!", "")
+                try:
+                    vote_target = int(target_id_str)
+                    # Verify target is in game and alive
+                    if vote_target not in game.players:
+                        await interaction.response.send_message(
+                            "❌ That player is not in this game!",
+                            ephemeral=True
+                        )
+                        return
+                    if not game.is_player_alive(vote_target):
+                        await interaction.response.send_message(
+                            "❌ That player has been eliminated!",
+                            ephemeral=True
+                        )
+                        return
+
+                    # Get display name
+                    if vote_target < 0:
+                        target_npc = database.get_npc_by_id(vote_target)
+                        target_display = f"🤖 **{target_npc.name}**" if target_npc else f"NPC {vote_target}"
+                    else:
+                        try:
+                            user = await self.bot.fetch_user(vote_target)
+                            target_display = user.mention
+                        except:
+                            target_display = f"<@{vote_target}>"
+                except ValueError:
+                    pass
+
+            # If not a mention, check if it's an NPC name
+            if vote_target is None:
+                target_npc = database.get_npc(target)
+                if target_npc and target_npc.id in game.players and game.is_player_alive(target_npc.id):
+                    vote_target = target_npc.id
+                    target_display = f"🤖 **{target_npc.name}**"
+
+            if vote_target is None:
+                await interaction.response.send_message(
+                    "❌ Invalid vote target! Use @mention, NPC name, 'Abstain', or 'Veto'.",
+                    ephemeral=True
+                )
+                return
+
+        # Import game_logic for vote formatting
+        from utils import game_logic
+
+        # day was retrieved earlier from get_game_from_channel
+        # Initialize votes structure if needed
+        if game.name not in player_actions_cog.votes:
+            player_actions_cog.votes[game.name] = {}
+        if day not in player_actions_cog.votes[game.name]:
+            player_actions_cog.votes[game.name][day] = {}
+
+        # Record vote
+        player_actions_cog.votes[game.name][day][npc.id] = vote_target
+
+        # Update vote tracking message
+        votes_channel_id = game.channels[day]["votes_channel_id"]
+        votes_message_id = game.channels[day]["votes_message_id"]
+
+        try:
+            channel = await self.bot.fetch_channel(votes_channel_id)
+            message = await channel.fetch_message(votes_message_id)
+
+            # Get user/NPC names
+            user_names = {}
+            for player_id in game.get_alive_players():
+                if player_id < 0:
+                    # NPC
+                    player_npc = database.get_npc_by_id(player_id)
+                    if player_npc:
+                        user_names[player_id] = f"🤖 {player_npc.name}"
+                    else:
+                        user_names[player_id] = f"🤖 NPC {player_id}"
+                else:
+                    # Real user
+                    try:
+                        user = await self.bot.fetch_user(player_id)
+                        user_names[player_id] = user.name
+                    except:
+                        user_names[player_id] = f"User {player_id}"
+
+            # Format vote message
+            vote_display_text = game_logic.format_vote_message(
+                player_actions_cog.votes[game.name][day],
+                user_names
+            )
+
+            embed = discord.Embed(
+                title=f"📊 Day {day} Votes - {game.name}",
+                description=vote_display_text,
+                color=discord.Color.blue()
+            )
+
+            await message.edit(embed=embed)
+
+            # Confirm vote
+            await interaction.response.send_message(
+                f"✅ NPC '{npc_name}' voted for {target_display}!",
+                ephemeral=True
+            )
+
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Failed to update vote: {e}",
+                ephemeral=True
+            )
+
+    @app_commands.command(name="gm_npc_say", description="[GM] Make an NPC send a message")
+    @app_commands.describe(
+        npc_name="Name of the NPC",
+        message="What the NPC should say"
+    )
+    async def npc_say(self, interaction: discord.Interaction, npc_name: str, message: str):
+        """Make an NPC speak in the current channel."""
+        # Check if user has moderator permissions
+        if not permissions.is_moderator(interaction.user):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
+            return
+
+        # Get the player_actions cog to access get_game_from_channel
+        player_actions_cog = self.bot.get_cog("PlayerActions")
+        if not player_actions_cog:
+            await interaction.response.send_message(
+                "❌ PlayerActions cog not loaded!",
+                ephemeral=True
+            )
+            return
+
+        # Find game from current channel
+        game, day = player_actions_cog.get_game_from_channel(interaction.channel.id)
+
+        if not game:
+            await interaction.response.send_message(
+                "❌ This channel is not a game channel! Use this command in a discussion thread.",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC exists
+        npc = database.get_npc(npc_name)
+        if not npc:
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' not found!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC is in the game
+        if npc.id not in game.players:
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' is not in this game!",
+                ephemeral=True
+            )
+            return
+
+        # Check if NPC is alive
+        if not game.is_player_alive(npc.id):
+            await interaction.response.send_message(
+                f"❌ NPC '{npc_name}' has been eliminated!",
+                ephemeral=True
+            )
+            return
+
+        # Format and send the message
+        formatted_message = f"**🤖 {npc.name}** (*{npc.profile}*): {message}"
+
+        # Acknowledge the command (ephemeral so only mod sees it)
+        await interaction.response.send_message(
+            f"✅ Sending message as {npc.name}...",
+            ephemeral=True
+        )
+
+        # Send the NPC's message to the channel
+        await interaction.channel.send(formatted_message)
+
+
+async def setup(bot):
+    """Setup function for cog."""
+    await bot.add_cog(GMCommands(bot))

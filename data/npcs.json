@@ -1,0 +1,22 @@
+{
+  "john": {
+    "id": -1,
+    "name": "john",
+    "profile": "An NPC player named john"
+  },
+  "jerry": {
+    "id": -2,
+    "name": "jerry",
+    "profile": "An NPC player named jerry"
+  },
+  "Franz": {
+    "id": -3,
+    "name": "Franz",
+    "profile": "An NPC player named Franz"
+  },
+  "bob": {
+    "id": -4,
+    "name": "bob",
+    "profile": "An NPC player named bob"
+  }
+}

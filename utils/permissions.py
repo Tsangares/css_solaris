@@ -8,6 +8,9 @@ from typing import Optional
 from models.game import Game
 
 
+MODERATOR_ROLE_NAME = "CSS Solaris Moderator"
+
+
 def is_game_creator(user_id: int, game: Game) -> bool:
     """
     Check if a user is the creator of a game.
@@ -33,7 +36,15 @@ def is_moderator(member: discord.Member) -> bool:
         True if member has moderator permissions
     """
     # Check for administrator or manage_guild permissions
-    return member.guild_permissions.administrator or member.guild_permissions.manage_guild
+    if member.guild_permissions.administrator or member.guild_permissions.manage_guild:
+        return True
+
+    # Check if user has the CSS Solaris Moderator role
+    for role in member.roles:
+        if role.name == MODERATOR_ROLE_NAME:
+            return True
+
+    return False
 
 
 def can_manage_game(user_id: int, member: discord.Member, game: Game) -> bool:
