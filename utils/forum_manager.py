@@ -150,3 +150,106 @@ async def get_or_create_game_forums(
             await voting_forum.edit(overwrites=overwrites)
 
     return discussions_forum, voting_forum
+
+
+async def create_private_channels(
+    guild: discord.Guild,
+    game_name: str,
+    mod_role: discord.Role = None,
+    bot_member: discord.Member = None
+) -> Tuple[discord.TextChannel, discord.TextChannel]:
+    """
+    Create private channels for saboteurs and dead players.
+
+    Args:
+        guild: Discord guild
+        game_name: Name of the game
+        mod_role: Optional moderator role
+        bot_member: Optional bot member
+
+    Returns:
+        Tuple of (saboteur_channel, dead_channel)
+    """
+    # Saboteur Channel (private, saboteurs only + mods + bot)
+    saboteur_overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False)
+    }
+
+    # Moderators can view (read-only)
+    if mod_role:
+        saboteur_overwrites[mod_role] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=False
+        )
+
+    # Bot can view and post
+    if bot_member:
+        saboteur_overwrites[bot_member] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            manage_messages=True
+        )
+
+    saboteur_channel = await guild.create_text_channel(
+        name=f"🔴-{game_name.lower().replace(' ', '-')}-saboteurs",
+        topic=f"Private channel for {game_name} saboteurs to coordinate. Mods can view but not send.",
+        overwrites=saboteur_overwrites,
+        reason=f"CSS Solaris saboteur channel for {game_name}"
+    )
+
+    # Dead Channel (read-only for dead players, mods can post)
+    dead_overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False)
+    }
+
+    # Moderators can view and post
+    if mod_role:
+        dead_overwrites[mod_role] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True
+        )
+
+    # Bot can view and post
+    if bot_member:
+        dead_overwrites[bot_member] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            manage_messages=True
+        )
+
+    dead_channel = await guild.create_text_channel(
+        name=f"💀-{game_name.lower().replace(' ', '-')}-afterlife",
+        topic=f"Eliminated players from {game_name} can watch here. Read-only for dead players.",
+        overwrites=dead_overwrites,
+        reason=f"CSS Solaris afterlife channel for {game_name}"
+    )
+
+    # Send welcome messages
+    saboteur_embed = discord.Embed(
+        title=f"🔴 {game_name} - Saboteur Channel",
+        description=(
+            "Welcome, saboteurs! This is your private coordination channel.\n\n"
+            "**Your Goal:** Eliminate crew members until you control ≥50% of the ship.\n\n"
+            "**Strategy Tips:**\n"
+            "• Don't all vote the same way - it looks suspicious!\n"
+            "• Spread out accusations to create chaos\n"
+            "• Defend each other subtly, but not too obviously\n"
+            "• If one saboteur is caught, the rest should act shocked\n\n"
+            "Good luck! 🔪"
+        ),
+        color=discord.Color.red()
+    )
+    await saboteur_channel.send(embed=saboteur_embed)
+
+    dead_embed = discord.Embed(
+        title=f"💀 {game_name} - Afterlife",
+        description=(
+            "Welcome to the afterlife! This channel is for eliminated players.\n\n"
+            "You can watch the game continue, but please don't reveal information to living players!\n\n"
+            "Enjoy spectating! 👻"
+        ),
+        color=discord.Color.dark_gray()
+    )
+    await dead_channel.send(embed=dead_embed)
+
+    return saboteur_channel, dead_channel

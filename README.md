@@ -291,11 +291,22 @@ css_solaris/
 
 ## Future Features
 
-- [ ] Role system (Vigilante, Mafia, Detective, etc.)
-- [ ] Night cycle with special abilities
-- [ ] Private role channels
+### 🚀 Coming Soon: Full Role System
+See `ROLES_IMPLEMENTATION_PLAN.md` for detailed implementation plan.
+
+**Planned:**
+- **Space-themed Mafia**: Crew vs Saboteurs (25% saboteurs)
+- **Roles**: Crew Member, Saboteur, Security Officer (detective), Engineer (protector)
+- **Private Channels**: Saboteur coordination channel, Dead player afterlife channel
+- **Discord Roles**: Automatic role assignment with permission management
+- **Win Conditions**: Crew wins if all saboteurs eliminated, Saboteurs win at 50% control
+- **Role Reveals**: On death, player's role is publicly announced
+- **Team Victory**: Winning team and all roles revealed at game end
+
+### Other Future Ideas
+- [ ] Night cycle with special abilities (investigate, protect)
 - [ ] Game statistics and history
-- [ ] Customizable game settings
+- [ ] Customizable game settings (role ratios, special rules)
 - [ ] Spectator mode
 - [ ] Web dashboard
 

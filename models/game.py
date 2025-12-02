@@ -35,6 +35,8 @@ class Game:
         self.channels: Dict[int, Dict[str, int]] = {}  # {day: {votes_channel_id, discussion_channel_id, votes_message_id}}
         self.roles: Dict[int, str] = {}  # {user_id: role_name}
         self.eliminated_players: List[int] = []  # List of eliminated player IDs
+        self.team_channels: Dict[str, int] = {}  # {"saboteurs": channel_id, "dead": channel_id}
+        self.discord_roles: Dict[str, int] = {}  # {"crew": role_id, "saboteur": role_id, "dead": role_id}
 
     def add_player(self, user_id: int) -> bool:
         """
@@ -114,6 +116,20 @@ class Game:
         """
         return [p for p in self.players if p not in self.eliminated_players]
 
+    def get_player_team(self, user_id: int) -> str:
+        """
+        Get the team for a given player.
+
+        Args:
+            user_id: Discord user ID
+
+        Returns:
+            "crew" or "saboteur"
+        """
+        from utils import roles
+        role_name = self.roles.get(user_id, "Crew Member")
+        return roles.get_team(role_name)
+
     def to_dict(self) -> dict:
         """
         Convert game to dictionary for JSON serialization.
@@ -130,7 +146,9 @@ class Game:
             "players": self.players,
             "channels": self.channels,
             "roles": self.roles,
-            "eliminated_players": self.eliminated_players
+            "eliminated_players": self.eliminated_players,
+            "team_channels": self.team_channels,
+            "discord_roles": self.discord_roles
         }
 
     @classmethod
@@ -153,6 +171,8 @@ class Game:
         game.current_day = data["current_day"]
         game.players = data["players"]
         game.channels = {int(k): v for k, v in data["channels"].items()}  # Convert string keys back to int
-        game.roles = {int(k): v for k, v in data["roles"].items()}
+        game.roles = {int(k): v for k, v in data.get("roles", {}).items()} if data.get("roles") else {}
         game.eliminated_players = data.get("eliminated_players", [])
+        game.team_channels = data.get("team_channels", {})
+        game.discord_roles = data.get("discord_roles", {})
         return game

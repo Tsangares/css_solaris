@@ -117,7 +117,8 @@ def format_vote_message(votes: Dict[int, int or str], user_names: Dict[int, str]
 
 
 def format_day_end_message(eliminated_id: Optional[int], result_type: str,
-                           tally: Dict, user_names: Dict[int, str], day: int) -> str:
+                           tally: Dict, user_names: Dict[int, str], day: int,
+                           roles: Dict[int, str] = None) -> str:
     """
     Format the end-of-day announcement message.
 
@@ -127,16 +128,30 @@ def format_day_end_message(eliminated_id: Optional[int], result_type: str,
         tally: Vote tally dictionary
         user_names: Dictionary mapping user_id to username
         day: Current day number
+        roles: Optional dictionary mapping user_id to role_name (for role reveals)
 
     Returns:
         Formatted announcement message
     """
+    from utils import roles as role_utils
+
     lines = [f"🌙 **Day {day} has ended!**\n"]
 
     if result_type == "elimination":
         eliminated_name = user_names.get(eliminated_id, f"User {eliminated_id}")
         votes = tally.get(eliminated_id, 0)
-        lines.append(f"**{eliminated_name}** has been eliminated with **{votes}** vote{'s' if votes != 1 else ''}!")
+
+        # Add role reveal if roles are assigned
+        if roles and eliminated_id in roles:
+            eliminated_role = roles.get(eliminated_id)
+            role_info = role_utils.get_role_info(eliminated_role)
+            role_emoji = role_info.get('emoji', '')
+            lines.append(
+                f"**{eliminated_name}** has been eliminated with **{votes}** vote{'s' if votes != 1 else ''}!\n"
+                f"They were: {role_emoji} **{eliminated_role}**"
+            )
+        else:
+            lines.append(f"**{eliminated_name}** has been eliminated with **{votes}** vote{'s' if votes != 1 else ''}!")
 
     elif result_type == "tie":
         tied_names = [user_names.get(pid, f"User {pid}") for pid in tally.keys()]
@@ -163,13 +178,38 @@ def check_win_condition(alive_players: List[int], roles: Dict[int, str]) -> Opti
         roles: Dictionary mapping player_id to role_name
 
     Returns:
-        Winning team name or None if game continues
+        - "crew": Crew wins (all saboteurs eliminated)
+        - "saboteur": Saboteurs win (≥50% of alive players are saboteurs)
+        - "game_over": Legacy win condition (1 or 0 players left, no roles)
+        - None: Game continues
     """
-    # For now, this is a placeholder for future role-based win conditions
-    # Will implement when role system is added
+    if len(alive_players) == 0:
+        return "crew"  # Default to crew if everyone dies somehow
 
-    # Simple win condition: If 1 or 0 players remain, game over
-    if len(alive_players) <= 1:
-        return "game_over"
+    # If no roles assigned yet, use old win condition for backward compatibility
+    if not roles:
+        if len(alive_players) <= 1:
+            return "game_over"
+        return None
 
+    # Count alive by team
+    alive_crew = 0
+    alive_saboteurs = 0
+
+    for player_id in alive_players:
+        role = roles.get(player_id, "Crew Member")
+        if role == "Saboteur":
+            alive_saboteurs += 1
+        else:
+            alive_crew += 1
+
+    # Crew wins if all saboteurs are eliminated
+    if alive_saboteurs == 0:
+        return "crew"
+
+    # Saboteurs win if they are ≥50% of alive players
+    if alive_saboteurs >= len(alive_players) / 2:
+        return "saboteur"
+
+    # Game continues
     return None

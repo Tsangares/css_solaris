@@ -171,9 +171,85 @@ class GameManagement(commands.Cog):
                 "votes_message_id": vote_message.id
             }
 
-            # Assign roles (for now, all players are villagers)
-            for player_id in game.players:
-                game.roles[player_id] = "villager"
+            # NEW: Assign roles using the role system
+            from utils import roles as role_utils, role_manager
+            game.roles = role_utils.assign_roles(list(game.players))
+
+            # NEW: Create Discord roles for teams
+            game.discord_roles = await role_manager.create_game_roles(guild, game.name)
+
+            # NEW: Create private channels for saboteurs and dead players
+            saboteur_channel, dead_channel = await forum_manager.create_private_channels(
+                guild, game.name, mod_role, bot_member
+            )
+            game.team_channels = {
+                "saboteurs": saboteur_channel.id,
+                "dead": dead_channel.id
+            }
+
+            # NEW: Assign Discord roles to players and give saboteurs channel access
+            saboteurs = []
+            for player_id, role_name in game.roles.items():
+                if player_id < 0:  # Skip NPCs for Discord roles
+                    continue
+
+                team = game.get_player_team(player_id)
+                role_id = game.discord_roles.get(team)
+
+                # Assign Discord role
+                await role_manager.assign_player_role(guild, player_id, role_id)
+
+                # Track saboteurs for channel access
+                if team == "saboteur":
+                    try:
+                        member = await guild.fetch_member(player_id)
+                        saboteurs.append(member)
+                    except:
+                        pass
+
+            # NEW: Give saboteurs access to saboteur channel
+            for member in saboteurs:
+                await saboteur_channel.set_permissions(
+                    member,
+                    view_channel=True,
+                    send_messages=True
+                )
+
+            # NEW: Send role DMs to players
+            for player_id, role_name in game.roles.items():
+                if player_id < 0:  # Skip NPCs
+                    continue
+
+                try:
+                    user = await self.bot.fetch_user(player_id)
+                    role_info = role_utils.get_role_info(role_name)
+
+                    dm_embed = discord.Embed(
+                        title=f"🎮 {game.name} - Your Role",
+                        description=f"{role_info['emoji']} **{role_name}**\n\n{role_info['description']}",
+                        color=discord.Color.red() if role_info['team'] == "saboteur" else discord.Color.blue()
+                    )
+
+                    # Add saboteur channel info for saboteurs
+                    if role_info['team'] == "saboteur":
+                        dm_embed.add_field(
+                            name="🔴 Saboteur Channel",
+                            value=f"Coordinate with fellow saboteurs in {saboteur_channel.mention}",
+                            inline=False
+                        )
+
+                    # Add special role info if applicable
+                    if role_info.get('special'):
+                        dm_embed.add_field(
+                            name="✨ Special Ability",
+                            value="(Coming soon in future updates!)",
+                            inline=False
+                        )
+
+                    await user.send(embed=dm_embed)
+                except Exception:
+                    # User has DMs disabled or other error
+                    pass
 
             database.save_game(game)
 
@@ -194,13 +270,16 @@ class GameManagement(commands.Cog):
             # Game description
             game_description = (
                 "**🎭 About CSS Solaris**\n"
-                "CSS Solaris is a social deduction game where players must work together to eliminate threats "
-                "while hidden adversaries work against them. Use discussion, voting, and deduction to survive!\n\n"
+                "CSS Solaris is a social deduction game of **Crew vs Saboteurs**. "
+                "The crew must identify and eliminate all saboteurs before they take control of the ship!\n\n"
+                f"{role_utils.format_role_distribution(len(game.players))}\n\n"
                 "**📜 How to Play:**\n"
                 "• Discuss with other players to find suspicious behavior\n"
                 "• Use `/vote @player` to vote someone out (or `/vote Abstain` to skip elimination)\n"
                 "• Players with the most votes are eliminated at day's end\n"
-                "• Work together to identify and eliminate all threats!\n\n"
+                "• **Crew wins** if all saboteurs are eliminated\n"
+                "• **Saboteurs win** if they control ≥50% of the ship\n\n"
+                "**Your role has been sent to you via DM!** Check your messages! 📬\n\n"
             )
 
             # Announcement for players (don't mention hidden votes channel)

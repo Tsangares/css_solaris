@@ -271,14 +271,58 @@ class Moderator(commands.Cog):
                     except:
                         user_names[player_id] = f"User {player_id}"
 
-            # Format end-of-day message
+            # Format end-of-day message (with role reveal)
             announcement = game_logic.format_day_end_message(
-                eliminated_id, result_type, tally, user_names, current_day
+                eliminated_id, result_type, tally, user_names, current_day, game.roles
             )
 
             # Eliminate player if needed
             if eliminated_id:
                 game.eliminate_player(eliminated_id)
+
+                # NEW: Handle death permissions for Discord roles and channels
+                if eliminated_id > 0:  # Only for real players, not NPCs
+                    from utils import role_manager
+                    guild = interaction.guild
+
+                    # Get Discord role IDs
+                    dead_role_id = game.discord_roles.get("dead")
+                    team = game.get_player_team(eliminated_id)
+                    team_role_id = game.discord_roles.get(team)
+
+                    # Move player to dead role
+                    if dead_role_id:
+                        await role_manager.assign_player_role(guild, eliminated_id, dead_role_id)
+
+                    # Remove from team role
+                    if team_role_id:
+                        await role_manager.remove_player_role(guild, eliminated_id, team_role_id)
+
+                    # Give access to dead channel
+                    dead_channel_id = game.team_channels.get("dead")
+                    if dead_channel_id:
+                        try:
+                            dead_channel = await self.bot.fetch_channel(dead_channel_id)
+                            member = await guild.fetch_member(eliminated_id)
+
+                            # Give read-only access to dead channel
+                            await dead_channel.set_permissions(
+                                member,
+                                view_channel=True,
+                                send_messages=False
+                            )
+
+                            # Send notification in dead channel
+                            eliminated_name = user_names.get(eliminated_id, f"User {eliminated_id}")
+                            eliminated_role = game.roles.get(eliminated_id, "Unknown")
+                            from utils import roles as role_utils
+                            role_info = role_utils.get_role_info(eliminated_role)
+                            await dead_channel.send(
+                                f"💀 **{eliminated_name}** ({role_info['emoji']} {eliminated_role}) has joined the afterlife..."
+                            )
+                        except Exception:
+                            # Channel might not exist or member not found
+                            pass
 
             # Check win condition
             win_team = game_logic.check_win_condition(game.get_alive_players(), game.roles)
@@ -287,31 +331,49 @@ class Moderator(commands.Cog):
                 game.end_game()
                 database.save_game(game)
 
-                # Determine winner(s)
-                alive_players = game.get_alive_players()
-                winner_names = []
-                for player_id in alive_players:
-                    if player_id < 0:
-                        # NPC
-                        npc = database.get_npc_by_id(player_id)
-                        if npc:
-                            winner_names.append(f"🤖 {npc.name}")
-                        else:
-                            winner_names.append(f"🤖 NPC {player_id}")
-                    else:
-                        # Real user
-                        try:
-                            user = await self.bot.fetch_user(player_id)
-                            winner_names.append(user.mention)
-                        except:
-                            winner_names.append(f"<@{player_id}>")
+                from utils import roles as role_utils
 
-                winner_text = ", ".join(winner_names) if winner_names else "No one"
+                # Build team victory message with all roles
+                if win_team == "crew":
+                    title = "🏆 Crew Victory!"
+                    victory_desc = "The crew has successfully eliminated all saboteurs!\n\n"
+                    color = discord.Color.blue()
+                elif win_team == "saboteur":
+                    title = "🔴 Saboteur Victory!"
+                    victory_desc = "The saboteurs have taken control of the ship!\n\n"
+                    color = discord.Color.red()
+                else:
+                    # Fallback for old games or edge cases
+                    title = "🏁 Game Over!"
+                    victory_desc = "The game has ended!\n\n"
+                    color = discord.Color.red()
+
+                # List winners by role
+                alive_players = game.get_alive_players()
+                winner_list = []
+                for player_id in alive_players:
+                    name = user_names.get(player_id, f"User {player_id}")
+                    role_name = game.roles.get(player_id, "Unknown")
+                    role_info = role_utils.get_role_info(role_name)
+                    role_emoji = role_info.get('emoji', '')
+                    winner_list.append(f"{role_emoji} {name} - **{role_name}**")
+
+                victory_desc += "**Winners:**\n" + "\n".join(winner_list) if winner_list else "**Winners:** No one"
+
+                # Show all players with their roles
+                victory_desc += "\n\n**All Players:**\n"
+                for player_id in game.players:
+                    name = user_names.get(player_id, f"User {player_id}")
+                    role_name = game.roles.get(player_id, "Unknown")
+                    role_info = role_utils.get_role_info(role_name)
+                    role_emoji = role_info.get('emoji', '')
+                    status = "💀" if player_id not in alive_players else "✅"
+                    victory_desc += f"{status} {role_emoji} {name} - **{role_name}**\n"
 
                 embed = discord.Embed(
-                    title=f"🏁 {game.name} - Game Over!",
-                    description=announcement + f"\n\n**The game has ended!**\n**Winner(s):** {winner_text}",
-                    color=discord.Color.red()
+                    title=f"{title}",
+                    description=announcement + f"\n\n{victory_desc}",
+                    color=color
                 )
 
                 await interaction.followup.send(embed=embed)
@@ -340,16 +402,48 @@ class Moderator(commands.Cog):
                         break
 
                 if general_channel:
+                    # Determine winner text
+                    if win_team == "crew":
+                        winner_announcement = "🏆 **Crew Victory!** The crew has eliminated all saboteurs!"
+                    elif win_team == "saboteur":
+                        winner_announcement = "🔴 **Saboteur Victory!** The saboteurs have taken control!"
+                    else:
+                        winner_announcement = "🏁 The game has ended!"
+
                     general_embed = discord.Embed(
-                        title=f"🏆 {game.name} has ended!",
-                        description=f"**Winner(s):** {winner_text}\n\nCongratulations! 🎉",
-                        color=discord.Color.gold()
+                        title=f"{game.name} has ended!",
+                        description=f"{winner_announcement}\n\nCongratulations to the winners! 🎉",
+                        color=discord.Color.gold() if win_team == "crew" else discord.Color.red()
                     )
                     try:
                         await general_channel.send(embed=general_embed)
                     except:
                         # If we can't post in general, that's okay
                         pass
+
+                # NEW: Cleanup private channels and Discord roles
+                from utils import role_manager
+
+                # Delete saboteur and dead channels
+                saboteur_channel_id = game.team_channels.get("saboteurs")
+                dead_channel_id = game.team_channels.get("dead")
+
+                if saboteur_channel_id:
+                    try:
+                        channel = await self.bot.fetch_channel(saboteur_channel_id)
+                        await channel.delete(reason=f"CSS Solaris game {game.name} ended")
+                    except:
+                        pass
+
+                if dead_channel_id:
+                    try:
+                        channel = await self.bot.fetch_channel(dead_channel_id)
+                        await channel.delete(reason=f"CSS Solaris game {game.name} ended")
+                    except:
+                        pass
+
+                # Delete Discord roles
+                await role_manager.cleanup_game_roles(guild, list(game.discord_roles.values()))
 
                 return
 
