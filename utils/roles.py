@@ -38,18 +38,13 @@ ROLES = {
 }
 
 
-def get_role_distribution(num_players: int) -> Dict[str, int]:
+def get_role_distribution(num_players: int, saboteur_ratio: float = 0.25) -> Dict[str, int]:
     """
     Calculate how many of each role for a given player count.
 
-    Rules:
-    - 25% saboteurs (rounded up, minimum 1)
-    - 1 Security Officer if 6+ players
-    - 1 Engineer if 8+ players
-    - Rest are Crew Members
-
     Args:
         num_players: Total number of players
+        saboteur_ratio: Fraction of players to make saboteurs
 
     Returns:
         Dictionary mapping role name to count
@@ -59,8 +54,9 @@ def get_role_distribution(num_players: int) -> Dict[str, int]:
 
     distribution = {}
 
-    # Calculate saboteurs (~25%, rounded up, minimum 1)
-    num_saboteurs = max(1, (num_players + 3) // 4)  # Rounds up
+    # Calculate saboteurs based on configurable ratio (minimum 1)
+    import math
+    num_saboteurs = max(1, math.ceil(num_players * saboteur_ratio))
     distribution["Saboteur"] = num_saboteurs
 
     # Assign special roles
@@ -81,18 +77,19 @@ def get_role_distribution(num_players: int) -> Dict[str, int]:
     return distribution
 
 
-def assign_roles(player_ids: List[int]) -> Dict[int, str]:
+def assign_roles(player_ids: List[int], saboteur_ratio: float = 0.25) -> Dict[int, str]:
     """
     Assign roles to players randomly based on game size.
 
     Args:
         player_ids: List of player IDs to assign roles to
+        saboteur_ratio: Fraction of players to make saboteurs (default 0.25)
 
     Returns:
         Dictionary mapping player_id to role_name
     """
     num_players = len(player_ids)
-    distribution = get_role_distribution(num_players)
+    distribution = get_role_distribution(num_players, saboteur_ratio)
 
     # Create a list of roles to assign
     role_list = []

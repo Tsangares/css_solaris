@@ -47,6 +47,8 @@ venv.bak/
 
 # Game Data
 data/games.json
+data/npcs.json
+data/config.json
 
 # Logs
 *.log

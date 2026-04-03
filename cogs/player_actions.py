@@ -17,8 +17,6 @@ class PlayerActions(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        # Store votes in memory: {game_name: {day: {voter_id: target_id}}}
-        self.votes: Dict[str, Dict[int, Dict[int, int or str]]] = {}
 
     def get_game_from_channel(self, channel_id: int) -> tuple:
         """
@@ -92,6 +90,12 @@ class PlayerActions(commands.Cog):
         game.add_player(interaction.user.id)
         database.save_game(game)
 
+        # Assign game role
+        from utils import role_manager
+        player_role_id = game.discord_roles.get("player")
+        if player_role_id:
+            await role_manager.assign_player_role(interaction.guild, interaction.user.id, player_role_id)
+
         # Update signup message
         player_list = []
         for player_id in game.players:
@@ -152,24 +156,15 @@ class PlayerActions(commands.Cog):
                     if npc:
                         player_choices.append(app_commands.Choice(name=f"🤖 {npc.name}", value=npc.name))
                 else:
-                    # Real player - we'll use their name if we can fetch it
-                    try:
-                        # For autocomplete, we can't await fetch_user, so we'll just use their ID
-                        # The user can still use @mention which will work
-                        pass  # Skip real players for autocomplete for now, they can use @mention
-                    except:
-                        pass
+                    # Real player - use cached member lookup (sync, no await needed)
+                    member = interaction.guild.get_member(player_id)
+                    if member:
+                        player_choices.append(app_commands.Choice(name=member.display_name, value=f"<@{player_id}>"))
 
-            # If <= 20 players, show all NPCs
-            # If > 20, randomly sample 10
-            if len(player_choices) <= 20:
-                choices.extend(player_choices)
-            else:
-                choices.extend(random.sample(player_choices, min(10, len(player_choices))))
+            random.shuffle(player_choices)
+            choices.extend(player_choices[:20])
 
-        # Always add Abstain and Veto options
         choices.append(app_commands.Choice(name="Abstain", value="Abstain"))
-        choices.append(app_commands.Choice(name="Veto", value="Veto"))
 
         # Filter based on what user is currently typing
         if current:
@@ -177,8 +172,8 @@ class PlayerActions(commands.Cog):
 
         return choices[:25]  # Discord limit is 25 choices
 
-    @app_commands.command(name="vote", description="Vote for a player or Abstain/Veto")
-    @app_commands.describe(target="The player to vote for, or 'Abstain' or 'Veto'")
+    @app_commands.command(name="vote", description="Vote for a player or Abstain")
+    @app_commands.describe(target="The player to vote for, or 'Abstain'")
     @app_commands.autocomplete(target=vote_autocomplete)
     async def vote(self, interaction: discord.Interaction, target: str):
         """Cast or update a vote."""
@@ -196,6 +191,14 @@ class PlayerActions(commands.Cog):
         if game.status != GameStatus.ACTIVE:
             await interaction.response.send_message(
                 "❌ This game is not currently active!",
+                ephemeral=True
+            )
+            return
+
+        # Check if it's day phase
+        if game.phase != "day":
+            await interaction.response.send_message(
+                "🌙 Voting is closed — it's nighttime. The saboteurs are choosing their target...",
                 ephemeral=True
             )
             return
@@ -221,7 +224,7 @@ class PlayerActions(commands.Cog):
 
         # Parse target
         target_upper = target.upper()
-        if target_upper in ["VETO", "ABSTAIN"]:
+        if target_upper == "ABSTAIN":
             vote_target = target_upper
         else:
             vote_target = None
@@ -258,19 +261,16 @@ class PlayerActions(commands.Cog):
                     vote_target = npc.id
                 else:
                     await interaction.followup.send(
-                        "❌ Invalid vote target! Use @mention, NPC name, 'Abstain', or 'Veto'.",
+                        "❌ Invalid vote target! Use @mention, NPC name, 'Abstain'.",
                         ephemeral=True
                     )
                     return
 
-        # Initialize votes structure if needed
-        if game.name not in self.votes:
-            self.votes[game.name] = {}
-        if day not in self.votes[game.name]:
-            self.votes[game.name][day] = {}
-
-        # Record vote
-        self.votes[game.name][day][interaction.user.id] = vote_target
+        # Record vote on the game model and persist
+        if day not in game.votes:
+            game.votes[day] = {}
+        game.votes[day][interaction.user.id] = vote_target
+        database.save_game(game)
 
         # Update vote tracking message
         votes_channel_id = game.channels[day]["votes_channel_id"]
@@ -280,29 +280,27 @@ class PlayerActions(commands.Cog):
             channel = await self.bot.fetch_channel(votes_channel_id)
             message = await channel.fetch_message(votes_message_id)
 
-            # Get user/NPC names
+            # Get user/NPC display names
             user_names = {}
-            for player_id in game.get_alive_players():
+            for player_id in game.players:
                 if player_id < 0:
-                    # NPC
                     npc = database.get_npc_by_id(player_id)
-                    if npc:
-                        user_names[player_id] = f"🤖 {npc.name}"
-                    else:
-                        user_names[player_id] = f"🤖 NPC {player_id}"
+                    user_names[player_id] = f"🤖 {npc.name}" if npc else f"🤖 NPC {player_id}"
                 else:
-                    # Real user
-                    try:
-                        user = await self.bot.fetch_user(player_id)
-                        user_names[player_id] = user.name
-                    except:
-                        user_names[player_id] = f"User {player_id}"
+                    member = interaction.guild.get_member(player_id)
+                    user_names[player_id] = member.display_name if member else f"User {player_id}"
 
             # Format vote message
             vote_display = game_logic.format_vote_message(
-                self.votes[game.name][day],
-                user_names
+                game.votes.get(day, {}),
+                user_names,
+                game.get_alive_players()
             )
+
+            # Add discussion link
+            disc_channel_id = game.channels[day].get("discussion_channel_id")
+            if disc_channel_id:
+                vote_display += f"\n\n💬 Discussion: <#{disc_channel_id}>"
 
             embed = discord.Embed(
                 title=f"📊 Day {day} Votes - {game.name}",
@@ -312,40 +310,30 @@ class PlayerActions(commands.Cog):
 
             await message.edit(embed=embed)
 
-            # Send public confirmation in discussion channel (if not in votes channel)
-            if interaction.channel.id != votes_channel_id:
-                votes_thread = await self.bot.fetch_channel(votes_channel_id)
-                await interaction.channel.send(
-                    f"🗳️ {interaction.user.mention} has cast their vote! "
-                    f"(Vote tally: {votes_thread.mention})"
-                )
-
-            # Confirm vote privately to user
+            # Build target display name for ledger and confirmation
             if isinstance(vote_target, int):
-                # Check if it's an NPC or real player
                 if vote_target < 0:
                     target_npc = database.get_npc_by_id(vote_target)
-                    if target_npc:
-                        await interaction.followup.send(
-                            f"✅ Your vote for 🤖 **{target_npc.name}** has been recorded!",
-                            ephemeral=True
-                        )
-                    else:
-                        await interaction.followup.send(
-                            f"✅ Your vote has been recorded!",
-                            ephemeral=True
-                        )
+                    target_display = f"🤖 **{target_npc.name}**" if target_npc else f"NPC {vote_target}"
                 else:
-                    target_user = await self.bot.fetch_user(vote_target)
-                    await interaction.followup.send(
-                        f"✅ Your vote for {target_user.mention} has been recorded!",
-                        ephemeral=True
-                    )
+                    target_display = f"<@{vote_target}>"
             else:
-                await interaction.followup.send(
-                    f"✅ Your vote to **{vote_target}** has been recorded!",
-                    ephemeral=True
+                target_display = f"**{vote_target}**"
+
+            # Post ledger entry as a separate message in the voting thread
+            await channel.send(f"🗳️ {interaction.user.mention} voted for {target_display}")
+
+            # Notify in discussion channel if voting from there
+            if interaction.channel.id != votes_channel_id:
+                await interaction.channel.send(
+                    f"🗳️ {interaction.user.mention} has cast their vote! "
+                    f"(Tally: {channel.mention})"
                 )
+
+            await interaction.followup.send(
+                f"✅ Your vote for {target_display} has been recorded!",
+                ephemeral=True
+            )
 
         except Exception as e:
             await interaction.followup.send(

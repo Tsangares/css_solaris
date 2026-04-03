@@ -16,7 +16,7 @@ class GameManagement(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="new_game", description="Create a new CSS Solaris game")
+    @app_commands.command(name="game", description="Create a new CSS Solaris game")
     @app_commands.describe(name="The name of your game")
     async def new_game(self, interaction: discord.Interaction, name: str):
         """Create a new game and open signups."""
@@ -52,14 +52,51 @@ class GameManagement(commands.Cog):
                 content=f"**{name}** - Sign up below!",
                 embed=embed
             )
+            try:
+                await signup_thread.message.pin()
+            except discord.Forbidden:
+                pass
 
-            # Create the game in database
+            # Create game role and assign to creator
+            from utils import role_manager
+            try:
+                discord_roles = await role_manager.create_game_roles(interaction.guild, name)
+            except discord.Forbidden:
+                discord_roles = {}
+
+            # Create the game in database - creator auto-joins
             game = Game(
                 name=name,
                 creator_id=interaction.user.id,
-                signup_thread_id=signup_thread.thread.id  # Forum posts create a thread
+                signup_thread_id=signup_thread.thread.id
             )
+            game.discord_roles = discord_roles
             database.save_game(game)
+
+            # Assign game role to creator
+            player_role_id = discord_roles.get("player")
+            if player_role_id:
+                await role_manager.assign_player_role(interaction.guild, interaction.user.id, player_role_id)
+
+            # Create game category with private channels
+            guild = interaction.guild
+            mod_role = discord.utils.get(guild.roles, name=permissions.MODERATOR_ROLE_NAME)
+            bot_member = guild.get_member(self.bot.user.id)
+            try:
+                category, mc_channel, saboteur_channel, dead_channel = await forum_manager.create_private_channels(
+                    guild, name, mod_role, bot_member, creator_id=interaction.user.id
+                )
+                game.team_channels = {
+                    "category": category.id,
+                    "mc": mc_channel.id,
+                    "saboteurs": saboteur_channel.id,
+                    "dead": dead_channel.id
+                }
+                database.save_game(game)
+            except Exception as e:
+                print(f"Failed to create private channels: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Send confirmation
             await interaction.followup.send(
@@ -94,9 +131,9 @@ class GameManagement(commands.Cog):
             return
 
         # Check permissions
-        if not permissions.can_manage_game(interaction.user.id, interaction.user, game):
+        if not permissions.can_run_game(interaction.user.id, game):
             await interaction.response.send_message(
-                "❌ You don't have permission to start this game!",
+                "❌ Only the game creator or game mods can start this game!",
                 ephemeral=True
             )
             return
@@ -147,10 +184,31 @@ class GameManagement(commands.Cog):
                 embed=discussion_embed
             )
 
+            # Send a pinnable welcome message in the discussion thread
+            alive_mentions = ", ".join(f"<@{pid}>" for pid in game.players if pid > 0)
+            npc_names = ", ".join(
+                f"🤖 {database.get_npc_by_id(pid).name}" for pid in game.players
+                if pid < 0 and database.get_npc_by_id(pid)
+            )
+            all_players = alive_mentions
+            if npc_names:
+                all_players += f", {npc_names}" if all_players else npc_names
+
+            welcome_msg = await discussion_thread.thread.send(
+                f"**Discussion for {game.name} is now open!**\n\n"
+                f"Players: {all_players}\n\n"
+                f"Use `/vote` to cast your vote. Good luck!"
+            )
+            try:
+                await welcome_msg.pin()
+            except discord.Forbidden:
+                pass
+
             # Create Day 1 voting thread with vote tracking embed
             vote_embed = discord.Embed(
                 title=f"📊 Day 1 Votes - {game.name}",
-                description="No votes yet. Use `/vote @player` or `/vote Abstain` or `/vote Veto`",
+                description=f"No votes yet. Use `/vote @player` or `/vote Abstain`\n\n"
+                            f"💬 Discussion: {discussion_thread.thread.mention}",
                 color=discord.Color.blue()
             )
 
@@ -160,64 +218,99 @@ class GameManagement(commands.Cog):
                 embed=vote_embed
             )
 
+            # Send a welcome message in the voting thread tagging all players
+            try:
+                vote_welcome = await voting_thread.thread.send(
+                    f"**Vote tracking for {game.name}**\n\n"
+                    f"Players: {all_players}\n\n"
+                    f"Votes will appear below as a ledger. The tally above updates live.\n"
+                    f"📌 Click the pins icon to jump back to the tally."
+                )
+                try:
+                    await vote_welcome.pin()
+                except discord.Forbidden:
+                    pass
+            except discord.Forbidden:
+                pass
+
+            # Add players + MC to both threads
+            users_to_add = set(pid for pid in game.players if pid > 0)
+            users_to_add.add(game.creator_id)  # Always include MC
+            for user_id in users_to_add:
+                try:
+                    await discussion_thread.thread.add_user(discord.Object(id=user_id))
+                except Exception:
+                    pass
+                try:
+                    await voting_thread.thread.add_user(discord.Object(id=user_id))
+                except Exception:
+                    pass
+
             # The first message is the one we just created with the embed
             vote_message = voting_thread.message
 
-            # Update game state
+            # Update game state and save immediately so progress isn't lost
+            from datetime import datetime, timezone
             game.start_game()
+            game.day_started_at = datetime.now(timezone.utc).isoformat()
             game.channels[1] = {
                 "votes_channel_id": voting_thread.thread.id,
                 "discussion_channel_id": discussion_thread.thread.id,
                 "votes_message_id": vote_message.id
             }
+            database.save_game(game)
 
-            # NEW: Assign roles using the role system
+            # Assign game roles (crew/saboteur) internally
             from utils import roles as role_utils, role_manager
-            game.roles = role_utils.assign_roles(list(game.players))
+            saboteur_ratio = game.settings.get("saboteur_ratio", 0.33)
+            game.roles = role_utils.assign_roles(list(game.players), saboteur_ratio=saboteur_ratio)
 
-            # NEW: Create Discord roles for teams
-            game.discord_roles = await role_manager.create_game_roles(guild, game.name)
+            # Roles already created when game was made and assigned on /join
+            # Just ensure they exist
+            if not game.discord_roles:
+                try:
+                    game.discord_roles = await role_manager.create_game_roles(guild, game.name)
+                except discord.Forbidden:
+                    pass
 
-            # NEW: Create private channels for saboteurs and dead players
-            saboteur_channel, dead_channel = await forum_manager.create_private_channels(
-                guild, game.name, mod_role, bot_member
-            )
-            game.team_channels = {
-                "saboteurs": saboteur_channel.id,
-                "dead": dead_channel.id
-            }
+            # Private channels were created in /game - fetch them
+            saboteur_channel = None
+            sab_channel_id = game.team_channels.get("saboteurs")
+            if sab_channel_id:
+                try:
+                    saboteur_channel = await self.bot.fetch_channel(sab_channel_id)
+                except Exception:
+                    pass
 
-            # NEW: Assign Discord roles to players and give saboteurs channel access
-            saboteurs = []
+            # Give saboteurs access to their private channel (by user, not by role)
+            saboteur_names = []
+            if saboteur_channel:
+                for player_id, role_name in game.roles.items():
+                    if game.get_player_team(player_id) == "saboteur":
+                        if player_id < 0:
+                            npc = database.get_npc_by_id(player_id)
+                            saboteur_names.append(f"🤖 {npc.name}" if npc else f"NPC {player_id}")
+                        else:
+                            try:
+                                member = await guild.fetch_member(player_id)
+                                await saboteur_channel.set_permissions(member, view_channel=True, send_messages=True)
+                                saboteur_names.append(f"<@{player_id}>")
+                            except Exception:
+                                saboteur_names.append(f"<@{player_id}>")
+
+                # Update saboteur channel with team roster
+                if saboteur_names:
+                    await saboteur_channel.send(
+                        f"**Your team:**\n" +
+                        "\n".join(f"- {name}" for name in saboteur_names)
+                    )
+
+            # Send role DMs to players with channel links
+            disc_thread = discussion_thread.thread
+            vote_thread = voting_thread.thread
+
             for player_id, role_name in game.roles.items():
-                if player_id < 0:  # Skip NPCs for Discord roles
-                    continue
-
-                team = game.get_player_team(player_id)
-                role_id = game.discord_roles.get(team)
-
-                # Assign Discord role
-                await role_manager.assign_player_role(guild, player_id, role_id)
-
-                # Track saboteurs for channel access
-                if team == "saboteur":
-                    try:
-                        member = await guild.fetch_member(player_id)
-                        saboteurs.append(member)
-                    except:
-                        pass
-
-            # NEW: Give saboteurs access to saboteur channel
-            for member in saboteurs:
-                await saboteur_channel.set_permissions(
-                    member,
-                    view_channel=True,
-                    send_messages=True
-                )
-
-            # NEW: Send role DMs to players
-            for player_id, role_name in game.roles.items():
-                if player_id < 0:  # Skip NPCs
+                if player_id < 0:
                     continue
 
                 try:
@@ -230,25 +323,29 @@ class GameManagement(commands.Cog):
                         color=discord.Color.red() if role_info['team'] == "saboteur" else discord.Color.blue()
                     )
 
-                    # Add saboteur channel info for saboteurs
-                    if role_info['team'] == "saboteur":
-                        dm_embed.add_field(
-                            name="🔴 Saboteur Channel",
-                            value=f"Coordinate with fellow saboteurs in {saboteur_channel.mention}",
-                            inline=False
-                        )
+                    # Channel links
+                    links = f"💬 Discussion: {disc_thread.mention}\n🗳️ Vote tally: {vote_thread.mention}"
+                    if role_info['team'] == "saboteur" and saboteur_channel:
+                        links += f"\n🔴 Saboteur chat: {saboteur_channel.mention}"
+                    dm_embed.add_field(name="Channels", value=links, inline=False)
 
-                    # Add special role info if applicable
-                    if role_info.get('special'):
-                        dm_embed.add_field(
-                            name="✨ Special Ability",
-                            value="(Coming soon in future updates!)",
-                            inline=False
-                        )
+                    # Player list
+                    alive_names = []
+                    for pid in game.players:
+                        if pid < 0:
+                            npc = database.get_npc_by_id(pid)
+                            alive_names.append(f"🤖 {npc.name}" if npc else f"NPC {pid}")
+                        else:
+                            alive_names.append(f"<@{pid}>")
+                    dm_embed.add_field(
+                        name=f"Players ({len(game.players)})",
+                        value=", ".join(alive_names),
+                        inline=False
+                    )
 
+                    dm_embed.set_footer(text="Good luck! Your role is secret - don't share it!")
                     await user.send(embed=dm_embed)
                 except Exception:
-                    # User has DMs disabled or other error
                     pass
 
             database.save_game(game)
@@ -288,7 +385,7 @@ class GameManagement(commands.Cog):
                 description=game_description +
                            f"**Players ({len(game.players)}):**\n" + ", ".join(player_mentions) + "\n\n"
                            f"**Discussion Thread:** {discussion_thread.thread.mention}\n"
-                           f"Discuss and use `/vote @player` (or `/vote Abstain` or `/vote Veto`) here!\n\n"
+                           f"Discuss and use `/vote @player` (or `/vote Abstain`) here!\n\n"
                            f"Good luck!",
                 color=discord.Color.gold()
             )
@@ -310,6 +407,8 @@ class GameManagement(commands.Cog):
             await discussion_thread.thread.send(embed=player_announcement)
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             await interaction.followup.send(f"❌ Failed to start game: {e}")
 
 

@@ -40,16 +40,16 @@ async def on_ready():
     # Sync commands
     try:
         if GUILD_ID:
-            # Sync to specific guild for faster development
             guild = discord.Object(id=int(GUILD_ID))
             bot.tree.copy_global_to(guild=guild)
-            await bot.tree.sync(guild=guild)
-            print(f'✅ Synced commands to guild {GUILD_ID}')
+            synced = await bot.tree.sync(guild=guild)
+            print(f'✅ Synced {len(synced)} commands to guild {GUILD_ID}')
         else:
-            # Sync globally
-            await bot.tree.sync()
-            print('✅ Synced commands globally')
+            synced = await bot.tree.sync()
+            print(f'✅ Synced {len(synced)} commands globally')
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f'❌ Failed to sync commands: {e}')
 
     print(f'🚀 Bot is ready! Use /setup to get started.')
@@ -74,7 +74,9 @@ async def load_cogs():
         'cogs.game_management',
         'cogs.player_actions',
         'cogs.moderator',
-        'cogs.npc_commands'
+        'cogs.npc_commands',
+        'cogs.image_commands',
+        'cogs.communication'
     ]
 
     for cog in cogs:

@@ -5,36 +5,71 @@ Handles creation and management of forum channels.
 
 import discord
 from typing import Tuple
+from utils import server_config
 
 
+MAIN_CATEGORY_NAME = "CSS SOLARIS"
 LOBBY_FORUM_NAME = "Game Lobby"
 DISCUSSIONS_FORUM_NAME = "Game Discussions"
 VOTING_FORUM_NAME = "Game Voting"
 
 
-async def get_or_create_lobby_forum(guild: discord.Guild) -> discord.ForumChannel:
-    """
-    Get or create the Game Lobby forum channel.
-
-    Args:
-        guild: Discord guild
-
-    Returns:
-        ForumChannel for game lobbies
-    """
-    # Try to find existing forum (case-insensitive, handles Discord's auto-formatting)
-    target_name_lower = LOBBY_FORUM_NAME.lower()
+def _find_forum_by_name(guild: discord.Guild, name: str) -> discord.ForumChannel:
+    """Find a forum channel by name (case-insensitive, handles dash formatting)."""
+    target = name.lower()
     for channel in guild.channels:
         if isinstance(channel, discord.ForumChannel):
-            # Match both "Game Lobby" and "game-lobby" style names
-            if channel.name.lower() == target_name_lower or channel.name.lower() == target_name_lower.replace(" ", "-"):
+            if channel.name.lower() in (target, target.replace(" ", "-")):
                 return channel
+    return None
 
-    # Create new forum
+
+async def get_or_create_main_category(guild: discord.Guild) -> discord.CategoryChannel:
+    """Get or create the main CSS Solaris category for forums."""
+    configured_id = server_config.get("main_category_id")
+    if configured_id:
+        channel = guild.get_channel(configured_id)
+        if isinstance(channel, discord.CategoryChannel):
+            return channel
+
+    # Find by name
+    for cat in guild.categories:
+        if cat.name.upper() == MAIN_CATEGORY_NAME:
+            server_config.set("main_category_id", cat.id)
+            return cat
+
+    # Create
+    category = await guild.create_category(
+        name=MAIN_CATEGORY_NAME,
+        reason="CSS Solaris main category"
+    )
+    server_config.set("main_category_id", category.id)
+    return category
+
+
+async def get_or_create_lobby_forum(guild: discord.Guild) -> discord.ForumChannel:
+    """Get or create the Game Lobby forum channel under the main category."""
+    # Check config first
+    configured_id = server_config.get("lobby_forum_id")
+    if configured_id:
+        channel = guild.get_channel(configured_id)
+        if isinstance(channel, discord.ForumChannel):
+            return channel
+
+    # Fall back to name-based lookup
+    forum = _find_forum_by_name(guild, LOBBY_FORUM_NAME)
+    if forum:
+        server_config.set("lobby_forum_id", forum.id)
+        return forum
+
+    # Create under main category
+    category = await get_or_create_main_category(guild)
     forum = await guild.create_forum(
         name=LOBBY_FORUM_NAME,
-        topic="Create and join CSS Solaris games here!"
+        topic="Create and join CSS Solaris games here!",
+        category=category
     )
+    server_config.set("lobby_forum_id", forum.id)
     return forum
 
 
@@ -57,28 +92,34 @@ async def get_or_create_game_forums(
     discussions_forum = None
     voting_forum = None
 
-    # Normalize names for comparison
-    discussions_name_lower = DISCUSSIONS_FORUM_NAME.lower()
-    voting_name_lower = VOTING_FORUM_NAME.lower()
+    # Check config first
+    config = server_config.load_config()
+    disc_id = config.get("discussions_forum_id")
+    vote_id = config.get("voting_forum_id")
 
-    # Try to find existing forums (case-insensitive, handles Discord's auto-formatting)
-    for channel in guild.channels:
-        if isinstance(channel, discord.ForumChannel):
-            channel_name_lower = channel.name.lower()
+    if disc_id:
+        ch = guild.get_channel(disc_id)
+        if isinstance(ch, discord.ForumChannel):
+            discussions_forum = ch
+    if vote_id:
+        ch = guild.get_channel(vote_id)
+        if isinstance(ch, discord.ForumChannel):
+            voting_forum = ch
 
-            # Match both "Game Discussions" and "game-discussions" style names
-            if (channel_name_lower == discussions_name_lower or
-                channel_name_lower == discussions_name_lower.replace(" ", "-")):
-                discussions_forum = channel
-            elif (channel_name_lower == voting_name_lower or
-                  channel_name_lower == voting_name_lower.replace(" ", "-")):
-                voting_forum = channel
+    # Fall back to name-based lookup
+    if not discussions_forum:
+        discussions_forum = _find_forum_by_name(guild, DISCUSSIONS_FORUM_NAME)
+    if not voting_forum:
+        voting_forum = _find_forum_by_name(guild, VOTING_FORUM_NAME)
 
-    # Create missing forums
+    # Create missing forums under main category
+    category = await get_or_create_main_category(guild)
+
     if not discussions_forum:
         discussions_forum = await guild.create_forum(
             name=DISCUSSIONS_FORUM_NAME,
-            topic="Daily discussions for active CSS Solaris games"
+            topic="Daily discussions for active CSS Solaris games",
+            category=category
         )
 
     if not voting_forum:
@@ -102,19 +143,22 @@ async def get_or_create_game_forums(
                 create_public_threads=False
             )
 
-        # Allow bot to view and post
+        # Allow bot to view, post, and post in threads
         if bot_member:
             overwrites[bot_member] = discord.PermissionOverwrite(
                 view_channel=True,
                 send_messages=True,
+                send_messages_in_threads=True,
                 create_public_threads=True,
-                manage_threads=True
+                manage_threads=True,
+                manage_messages=True
             )
 
         voting_forum = await guild.create_forum(
             name=VOTING_FORUM_NAME,
             topic="Vote tallies for active CSS Solaris games (Read-only - only bot can post)",
-            overwrites=overwrites
+            overwrites=overwrites,
+            category=category
         )
     else:
         # Update permissions on existing voting forum if needed
@@ -138,93 +182,173 @@ async def get_or_create_game_forums(
                     create_public_threads=False
                 )
 
-            # Allow bot to view and post
+            # Allow bot to view, post, and post in threads
             if bot_member:
                 overwrites[bot_member] = discord.PermissionOverwrite(
                     view_channel=True,
                     send_messages=True,
+                    send_messages_in_threads=True,
                     create_public_threads=True,
-                    manage_threads=True
+                    manage_threads=True,
+                    manage_messages=True
                 )
 
             await voting_forum.edit(overwrites=overwrites)
 
+    # Persist discovered/created IDs to config
+    server_config.set("discussions_forum_id", discussions_forum.id)
+    server_config.set("voting_forum_id", voting_forum.id)
+
     return discussions_forum, voting_forum
+
+
+GAME_CATEGORY_PREFIX = "🎮 "
 
 
 async def create_private_channels(
     guild: discord.Guild,
     game_name: str,
     mod_role: discord.Role = None,
-    bot_member: discord.Member = None
-) -> Tuple[discord.TextChannel, discord.TextChannel]:
+    bot_member: discord.Member = None,
+    creator_id: int = None
+) -> Tuple[discord.CategoryChannel, discord.TextChannel, discord.TextChannel, discord.TextChannel]:
     """
-    Create private channels for saboteurs and dead players.
-
-    Args:
-        guild: Discord guild
-        game_name: Name of the game
-        mod_role: Optional moderator role
-        bot_member: Optional bot member
+    Create a game category with MC booth, saboteur, and dead channels.
 
     Returns:
-        Tuple of (saboteur_channel, dead_channel)
+        Tuple of (category, mc_channel, saboteur_channel, dead_channel)
     """
-    # Saboteur Channel (private, saboteurs only + mods + bot)
-    saboteur_overwrites = {
+    # Create category (hidden from @everyone)
+    category_overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False)
     }
-
-    # Moderators can view (read-only)
     if mod_role:
-        saboteur_overwrites[mod_role] = discord.PermissionOverwrite(
+        category_overwrites[mod_role] = discord.PermissionOverwrite(
             view_channel=True,
             send_messages=False
         )
-
-    # Bot can view and post
     if bot_member:
-        saboteur_overwrites[bot_member] = discord.PermissionOverwrite(
+        category_overwrites[bot_member] = discord.PermissionOverwrite(
             view_channel=True,
             send_messages=True,
+            manage_channels=True,
             manage_messages=True
         )
 
+    category = await guild.create_category(
+        name=f"{GAME_CATEGORY_PREFIX}{game_name}",
+        overwrites=category_overwrites,
+        reason=f"CSS Solaris game category for {game_name}"
+    )
+
+    # MC booth (creator + bot + mods only)
+    mc_overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False)
+    }
+    if bot_member:
+        mc_overwrites[bot_member] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, manage_messages=True
+        )
+    if mod_role:
+        mc_overwrites[mod_role] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True
+        )
+    if creator_id:
+        creator_member = guild.get_member(creator_id)
+        if creator_member:
+            mc_overwrites[creator_member] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True
+            )
+
+    mc_channel = await guild.create_text_channel(
+        name=f"🎭-mc-booth",
+        topic=f"MC workspace for {game_name}. Plan events, draft narration, manage the game.",
+        category=category,
+        overwrites=mc_overwrites,
+        reason=f"CSS Solaris MC channel for {game_name}"
+    )
+
+    mc_embed = discord.Embed(
+        title=f"🎭 {game_name} — MC Booth",
+        description="Welcome, MC! This is your private workspace. Players can't see this channel.",
+        color=discord.Color.purple()
+    )
+    mc_embed.add_field(
+        name="📜 Game Flow",
+        value=(
+            "1. **Day Phase** — Players discuss and `/vote` to eliminate someone\n"
+            "2. **`/endday`** — Tallies votes, eliminates the player (role hidden until dawn), night begins\n"
+            "3. **Night Phase** — Discussion locked. Saboteurs use `/kill` in their private channel to pick a target. Majority vote wins, random on ties\n"
+            "4. **`/endnight`** — Executes the kill, reveals yesterday's voted player's role, creates the next day\n"
+            "5. Repeat until crew or saboteurs win"
+        ),
+        inline=False
+    )
+    mc_embed.add_field(
+        name="🎭 MC Commands",
+        value=(
+            "- `/narrate <text>` — quick styled narration to the discussion thread\n"
+            "- `/narrate <message link>` — write a rich message here with images/markdown, right-click → Copy Message Link, then forward it\n"
+            "- `/say <message>` — post as the bot (announcement)\n"
+            "- `/say <message> as_npc:<name>` — speak as an NPC\n"
+            "- `/smite @player \"reason\"` — instantly eliminate a player (story event, penalty, etc.)\n"
+            "- `/revive @player` — bring a dead player back to life\n"
+            "- `/npc vote <name> <target>` — make an NPC cast a vote\n"
+            "- `/endday` / `/endnight` — advance the game phases\n"
+            "- `/mod add @user` — give someone game mod access\n"
+            "- `/panel` — view full game state overview"
+        ),
+        inline=False
+    )
+    mc_embed.add_field(
+        name="⚙️ How Night Kill Works",
+        value=(
+            "During night, alive saboteurs each use `/kill @player` in the saboteur channel. "
+            "If multiple saboteurs disagree, the majority target is killed. On a tie, it's random. "
+            "NPC saboteurs auto-vote a random target when `/endnight` runs. "
+            "Once all human saboteurs have voted, any of them can run `/endnight` — or you can run it as MC."
+        ),
+        inline=False
+    )
+    mc_embed.add_field(
+        name="🏆 Win Conditions (configurable)",
+        value=(
+            "**Crew wins** when: all saboteurs eliminated *(default)*\n"
+            "**Saboteurs win** when: they control ≥50% of alive players *(default)*\n"
+            "**Saboteur ratio**: ~33% of players *(default)*\n\n"
+            "Change these with `/configure` before starting the game."
+        ),
+        inline=False
+    )
+    mc_embed.add_field(
+        name="⏰ Timers",
+        value=(
+            "A 24h timer runs for both day and night. When it expires:\n"
+            "- Day: discussion auto-locks (you still run `/endday`)\n"
+            "- Night: unvoted saboteurs auto-pick random targets\n"
+            "Configure with `/configure` → day_duration_hours"
+        ),
+        inline=False
+    )
+    await mc_channel.send(embed=mc_embed)
+
+    # Saboteur channel under category
     saboteur_channel = await guild.create_text_channel(
-        name=f"🔴-{game_name.lower().replace(' ', '-')}-saboteurs",
-        topic=f"Private channel for {game_name} saboteurs to coordinate. Mods can view but not send.",
-        overwrites=saboteur_overwrites,
+        name=f"🔴-saboteurs",
+        topic=f"Private channel for {game_name} saboteurs to coordinate.",
+        category=category,
         reason=f"CSS Solaris saboteur channel for {game_name}"
     )
 
-    # Dead Channel (read-only for dead players, mods can post)
-    dead_overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False)
-    }
-
-    # Moderators can view and post
-    if mod_role:
-        dead_overwrites[mod_role] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True
-        )
-
-    # Bot can view and post
-    if bot_member:
-        dead_overwrites[bot_member] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            manage_messages=True
-        )
-
+    # Dead channel under category
     dead_channel = await guild.create_text_channel(
-        name=f"💀-{game_name.lower().replace(' ', '-')}-afterlife",
-        topic=f"Eliminated players from {game_name} can watch here. Read-only for dead players.",
-        overwrites=dead_overwrites,
+        name=f"💀-afterlife",
+        topic=f"Eliminated players from {game_name} spectate here.",
+        category=category,
         reason=f"CSS Solaris afterlife channel for {game_name}"
     )
 
-    # Send welcome messages
+    # Welcome messages
     saboteur_embed = discord.Embed(
         title=f"🔴 {game_name} - Saboteur Channel",
         description=(
@@ -252,4 +376,37 @@ async def create_private_channels(
     )
     await dead_channel.send(embed=dead_embed)
 
-    return saboteur_channel, dead_channel
+    return category, mc_channel, saboteur_channel, dead_channel
+
+
+async def cleanup_game_category(guild: discord.Guild, category_id: int):
+    """Delete a game category and all its channels."""
+    try:
+        category = guild.get_channel(category_id)
+        if isinstance(category, discord.CategoryChannel):
+            for channel in category.channels:
+                try:
+                    await channel.delete(reason="CSS Solaris game ended")
+                except Exception:
+                    pass
+            await category.delete(reason="CSS Solaris game ended")
+    except Exception:
+        pass
+
+
+async def cleanup_all_game_categories(guild: discord.Guild) -> int:
+    """Delete ALL CSS Solaris game categories. Returns count deleted."""
+    deleted = 0
+    for category in guild.categories:
+        if category.name.startswith(GAME_CATEGORY_PREFIX):
+            for channel in category.channels:
+                try:
+                    await channel.delete(reason="CSS Solaris purge")
+                except Exception:
+                    pass
+            try:
+                await category.delete(reason="CSS Solaris purge")
+                deleted += 1
+            except Exception:
+                pass
+    return deleted
