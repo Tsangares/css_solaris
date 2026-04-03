@@ -50,6 +50,9 @@ data/games.json
 data/npcs.json
 data/config.json
 
+# Claude project context
+claude.md
+
 # Logs
 *.log
 logs/
