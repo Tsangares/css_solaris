@@ -42,13 +42,16 @@ class Game:
         self.phase: str = "day"  # "day" or "night"
         self.night_kill_votes: Dict[int, int] = {}  # {saboteur_id: target_id} for current night
         self.last_vote_eliminated: Optional[int] = None  # player eliminated by vote (role revealed at dawn)
+        self.pending_vote_kill: Optional[int] = None  # queued vote kill (executed at dawn, can be protected)
+        self.protected_players: List[int] = []  # players protected this night (survive kills)
         self.day_started_at: Optional[str] = None  # ISO timestamp for day timer
         self.night_started_at: Optional[str] = None  # ISO timestamp for night timer
         self.settings: Dict[str, object] = {
             "player_say_enabled": False,
-            "win_crew": "all_saboteurs_dead",       # "all_saboteurs_dead" or "majority_crew"
-            "win_saboteur": "half_or_more",          # "half_or_more", "majority", or "last_standing"
-            "saboteur_ratio": 0.33,                  # fraction of players assigned as saboteurs
+            "win_crew": "all_saboteurs_dead",
+            "win_saboteur": "half_or_more",
+            "saboteur_ratio": 0.33,
+            "saboteur_chat_day_locked": True,  # lock saboteur channel during day
             "day_duration_hours": 24,
         }
 
@@ -168,6 +171,8 @@ class Game:
             "phase": self.phase,
             "night_kill_votes": {str(k): v for k, v in self.night_kill_votes.items()},
             "last_vote_eliminated": self.last_vote_eliminated,
+            "pending_vote_kill": self.pending_vote_kill,
+            "protected_players": self.protected_players,
             "day_started_at": self.day_started_at,
             "night_started_at": self.night_started_at,
             "settings": self.settings
@@ -209,6 +214,8 @@ class Game:
         game.phase = data.get("phase", "day")
         game.night_kill_votes = {int(k): v for k, v in data.get("night_kill_votes", {}).items()}
         game.last_vote_eliminated = data.get("last_vote_eliminated")
+        game.pending_vote_kill = data.get("pending_vote_kill")
+        game.protected_players = data.get("protected_players", [])
         game.day_started_at = data.get("day_started_at")
         game.night_started_at = data.get("night_started_at")
         # Merge saved settings with defaults (so new settings get their defaults)

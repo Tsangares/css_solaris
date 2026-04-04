@@ -293,7 +293,9 @@ class GameManagement(commands.Cog):
                         else:
                             try:
                                 member = await guild.fetch_member(player_id)
-                                await saboteur_channel.set_permissions(member, view_channel=True, send_messages=True)
+                                # Day phase: saboteurs can see but not send (locked until night)
+                                day_locked = game.settings.get("saboteur_chat_day_locked", True)
+                                await saboteur_channel.set_permissions(member, view_channel=True, send_messages=not day_locked)
                                 saboteur_names.append(f"<@{player_id}>")
                             except Exception:
                                 saboteur_names.append(f"<@{player_id}>")

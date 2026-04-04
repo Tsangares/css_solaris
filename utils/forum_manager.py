@@ -287,26 +287,29 @@ async def create_private_channels(
     mc_embed.add_field(
         name="🎭 MC Commands",
         value=(
-            "- `/narrate <text>` — quick styled narration to the discussion thread\n"
-            "- `/narrate <message link>` — write a rich message here with images/markdown, right-click → Copy Message Link, then forward it\n"
-            "- `/say <message>` — post as the bot (announcement)\n"
-            "- `/say <message> as_npc:<name>` — speak as an NPC\n"
-            "- `/smite @player \"reason\"` — instantly eliminate a player (story event, penalty, etc.)\n"
-            "- `/revive @player` — bring a dead player back to life\n"
-            "- `/npc vote <name> <target>` — make an NPC cast a vote\n"
-            "- `/endday` / `/endnight` — advance the game phases\n"
+            "- `/narrate <text>` — quick styled narration to discussion\n"
+            "- `/narrate <message link>` — forward a rich message with images\n"
+            "- `/say <message>` / `/say <message> as_npc:<name>` — bot or NPC speech\n"
+            "- `/smite @player \"reason\"` — instantly eliminate a player\n"
+            "- `/revive @player` — bring a dead player back\n"
+            "- `/protect @player` — shield from death tonight (night only)\n"
+            "- `/unprotect @player` — remove protection\n"
+            "- `/lock` / `/unlock` — lock/unlock the current thread\n"
+            "- `/endday` / `/endnight` — advance game phases\n"
             "- `/mod add @user` — give someone game mod access\n"
             "- `/panel` — view full game state overview"
         ),
         inline=False
     )
     mc_embed.add_field(
-        name="⚙️ How Night Kill Works",
+        name="⚙️ How Night Kill + Protection Works",
         value=(
-            "During night, alive saboteurs each use `/kill @player` in the saboteur channel. "
-            "If multiple saboteurs disagree, the majority target is killed. On a tie, it's random. "
-            "NPC saboteurs auto-vote a random target when `/endnight` runs. "
-            "Once all human saboteurs have voted, any of them can run `/endnight` — or you can run it as MC."
+            "During night, alive saboteurs use `/kill @player` in their channel (majority vote, random on tie). "
+            "NPC saboteurs auto-vote when `/endnight` runs.\n\n"
+            "**Deferred kills:** The vote elimination from `/endday` is NOT instant — the player is queued for death "
+            "and actually dies at dawn when `/endnight` runs. This gives you time to `/protect` them.\n\n"
+            "**`/protect @player`** — shields them from BOTH the vote kill and the night kill. "
+            "The dawn announcement will say they were mysteriously saved."
         ),
         inline=False
     )

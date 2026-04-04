@@ -299,66 +299,12 @@ class Moderator(commands.Cog):
                 eliminated_id, result_type, tally, user_names, current_day, game.roles, reveal_role=False
             )
 
-            # Eliminate player if needed
+            # Queue vote kill — NOT executed until dawn (/endnight)
+            # MC can /protect them during the night to save them
             if eliminated_id:
-                game.eliminate_player(eliminated_id)
-                game.last_vote_eliminated = eliminated_id
+                game.pending_vote_kill = eliminated_id
 
-                # NEW: Handle death permissions for Discord roles and channels
-                if eliminated_id > 0:  # Only for real players, not NPCs
-                    from utils import role_manager
-                    guild = interaction.guild
-
-                    # Get Discord role IDs
-                    dead_role_id = game.discord_roles.get("dead")
-                    team = game.get_player_team(eliminated_id)
-                    team_role_id = game.discord_roles.get(team)
-
-                    # Move player to dead role
-                    if dead_role_id:
-                        await role_manager.assign_player_role(guild, eliminated_id, dead_role_id)
-
-                    # Remove from team role
-                    if team_role_id:
-                        await role_manager.remove_player_role(guild, eliminated_id, team_role_id)
-
-                    # Give access to dead channel
-                    dead_channel_id = game.team_channels.get("dead")
-                    if dead_channel_id:
-                        try:
-                            dead_channel = await self.bot.fetch_channel(dead_channel_id)
-                            member = await guild.fetch_member(eliminated_id)
-
-                            # Give read-only access to dead channel
-                            await dead_channel.set_permissions(
-                                member,
-                                view_channel=True,
-                                send_messages=False
-                            )
-
-                            # Send notification in dead channel
-                            eliminated_name = user_names.get(eliminated_id, f"User {eliminated_id}")
-                            eliminated_role = game.roles.get(eliminated_id, "Unknown")
-                            from utils import roles as role_utils
-                            role_info = role_utils.get_role_info(eliminated_role)
-                            await dead_channel.send(
-                                f"💀 **{eliminated_name}** ({role_info['emoji']} {eliminated_role}) has joined the afterlife..."
-                            )
-                        except Exception:
-                            pass
-
-                    # If saboteur died, make saboteur channel read-only for them
-                    if team == "saboteur":
-                        sab_channel_id = game.team_channels.get("saboteurs")
-                        if sab_channel_id:
-                            try:
-                                sab_channel = await self.bot.fetch_channel(sab_channel_id)
-                                member = await guild.fetch_member(eliminated_id)
-                                await sab_channel.set_permissions(member, view_channel=True, send_messages=False)
-                            except Exception:
-                                pass
-
-            # Check win condition
+            # Check win condition (deferred kill doesn't count yet for win check)
             win_team = game_logic.check_win_condition(game.get_alive_players(), game.roles, game.settings)
             if win_team:
                 # Game over
@@ -528,11 +474,14 @@ class Moderator(commands.Cog):
                 return
 
             # Transition to night phase
-            from datetime import datetime, timezone
             game.phase = "night"
             game.night_kill_votes = {}
+            game.protected_players = []
             game.night_started_at = datetime.now(timezone.utc).isoformat()
             database.save_game(game)
+
+            # Unlock saboteur channel for night coordination
+            await self._set_saboteur_channel_locked(guild, game, locked=False)
 
             # Lock current discussion thread
             old_votes_thread = await self.bot.fetch_channel(game.channels[current_day]["votes_channel_id"])
@@ -610,7 +559,87 @@ class Moderator(commands.Cog):
             await interaction.followup.send(f"❌ Failed to end day: {e}")
 
 
-    # --- MC Commands ---
+    # --- MC Commands: Lock/Unlock ---
+
+    @app_commands.command(name="lock", description="Lock the current thread (MC only)")
+    async def lock(self, interaction: discord.Interaction):
+        """Lock the current thread to prevent messages."""
+        game, day = self._find_game_from_any_channel(interaction.channel.id)
+        if not game or not permissions.can_run_game(interaction.user.id, game):
+            await interaction.response.send_message("Only the MC can use this.", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message("This only works in threads.", ephemeral=True)
+            return
+        try:
+            await interaction.channel.edit(locked=True)
+            await interaction.response.send_message("🔒 Thread locked.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed to lock: {e}", ephemeral=True)
+
+    @app_commands.command(name="unlock", description="Unlock the current thread (MC only)")
+    async def unlock(self, interaction: discord.Interaction):
+        """Unlock the current thread."""
+        game, day = self._find_game_from_any_channel(interaction.channel.id)
+        if not game or not permissions.can_run_game(interaction.user.id, game):
+            await interaction.response.send_message("Only the MC can use this.", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message("This only works in threads.", ephemeral=True)
+            return
+        try:
+            await interaction.channel.edit(locked=False, archived=False)
+            await interaction.response.send_message("🔓 Thread unlocked.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed to unlock: {e}", ephemeral=True)
+
+    # --- MC Commands: Protect ---
+
+    @app_commands.command(name="protect", description="Protect a player from death tonight (MC only, night phase)")
+    @app_commands.describe(target="The player to protect")
+    async def protect(self, interaction: discord.Interaction, target: discord.Member):
+        """Protect a player from being killed this night."""
+        game, day = self._find_game_from_any_channel(interaction.channel.id)
+        if not game:
+            await interaction.response.send_message("Use this in a game channel or MC booth.", ephemeral=True)
+            return
+        if not permissions.can_run_game(interaction.user.id, game):
+            await interaction.response.send_message("Only the MC can protect players.", ephemeral=True)
+            return
+        if game.phase != "night":
+            await interaction.response.send_message("Protection only works during the night phase.", ephemeral=True)
+            return
+        if target.id not in game.players or not game.is_player_alive(target.id):
+            await interaction.response.send_message("That player is not alive in this game.", ephemeral=True)
+            return
+        if target.id in game.protected_players:
+            await interaction.response.send_message(f"{target.display_name} is already protected.", ephemeral=True)
+            return
+
+        game.protected_players.append(target.id)
+        database.save_game(game)
+        await interaction.response.send_message(f"🛡️ **{target.display_name}** is protected tonight. They will survive any kill attempt.", ephemeral=True)
+
+    @app_commands.command(name="unprotect", description="Remove protection from a player (MC only)")
+    @app_commands.describe(target="The player to unprotect")
+    async def unprotect(self, interaction: discord.Interaction, target: discord.Member):
+        """Remove protection from a player."""
+        game, day = self._find_game_from_any_channel(interaction.channel.id)
+        if not game:
+            await interaction.response.send_message("Use this in a game channel or MC booth.", ephemeral=True)
+            return
+        if not permissions.can_run_game(interaction.user.id, game):
+            await interaction.response.send_message("Only the MC can unprotect players.", ephemeral=True)
+            return
+        if target.id not in game.protected_players:
+            await interaction.response.send_message(f"{target.display_name} is not protected.", ephemeral=True)
+            return
+
+        game.protected_players.remove(target.id)
+        database.save_game(game)
+        await interaction.response.send_message(f"🛡️ Protection removed from **{target.display_name}**.", ephemeral=True)
+
+    # --- MC Commands: Smite/Revive ---
 
     @app_commands.command(name="smite", description="Instantly eliminate a player (MC only)")
     @app_commands.describe(target="The player to eliminate", reason="What happened to them")
@@ -997,52 +1026,50 @@ class Moderator(commands.Cog):
                     member = guild.get_member(player_id)
                     user_names[player_id] = member.display_name if member else f"User {player_id}"
 
-            # Reveal yesterday's vote elimination role
             from utils import roles as role_utils
             dawn_lines = []
-            if game.last_vote_eliminated:
-                ve_name = user_names.get(game.last_vote_eliminated, f"Player {game.last_vote_eliminated}")
-                ve_role = game.roles.get(game.last_vote_eliminated, "Unknown")
+
+            # Execute deferred vote kill (from /endday)
+            vote_killed = game.pending_vote_kill
+            if vote_killed:
+                ve_name = user_names.get(vote_killed, f"Player {vote_killed}")
+                ve_role = game.roles.get(vote_killed, "Unknown")
                 ve_info = role_utils.get_role_info(ve_role)
-                dawn_lines.append(f"**{ve_name}**'s role revealed: {ve_info.get('emoji', '')} **{ve_role}**")
-                game.last_vote_eliminated = None
+                if vote_killed in game.protected_players:
+                    dawn_lines.append(f"✨ A mysterious force shielded **{ve_name}** from execution! They survive.")
+                else:
+                    await self._execute_kill(guild, game, vote_killed, user_names)
+                    dawn_lines.append(
+                        f"**{ve_name}** was executed by vote.\n"
+                        f"They were: {ve_info.get('emoji', '')} **{ve_role}**"
+                    )
+                game.pending_vote_kill = None
 
             # Execute night kill
-            kill_announcement = ""
             if killed_id:
-                game.eliminate_player(killed_id)
                 killed_name = user_names.get(killed_id, f"Player {killed_id}")
                 killed_role = game.roles.get(killed_id, "Unknown")
                 role_info = role_utils.get_role_info(killed_role)
-                role_emoji = role_info.get('emoji', '')
-                dawn_lines.append(
-                    f"**{killed_name}** was found dead...\n"
-                    f"They were: {role_emoji} **{killed_role}**"
-                )
-
-                # Handle dead player Discord roles
-                if killed_id > 0:
-                    from utils import role_manager
-                    dead_role_id = game.discord_roles.get("dead")
-                    player_role_id = game.discord_roles.get("player")
-                    if dead_role_id:
-                        await role_manager.assign_player_role(guild, killed_id, dead_role_id)
-                    if player_role_id:
-                        await role_manager.remove_player_role(guild, killed_id, player_role_id)
-
-                    # Give access to dead channel
-                    dead_channel_id = game.team_channels.get("dead")
-                    if dead_channel_id:
-                        try:
-                            dead_ch = await self.bot.fetch_channel(dead_channel_id)
-                            member = await guild.fetch_member(killed_id)
-                            await dead_ch.set_permissions(member, view_channel=True, send_messages=False)
-                        except Exception:
-                            pass
-            else:
+                if killed_id in game.protected_players:
+                    dawn_lines.append(f"✨ A mysterious force shielded **{killed_name}** from the saboteurs! They survive.")
+                elif killed_id in game.eliminated_players:
+                    # Already killed by vote, skip
+                    pass
+                else:
+                    await self._execute_kill(guild, game, killed_id, user_names)
+                    dawn_lines.append(
+                        f"**{killed_name}** was found dead...\n"
+                        f"They were: {role_info.get('emoji', '')} **{killed_role}**"
+                    )
+            elif not vote_killed:
                 dawn_lines.append("The night passes quietly... no one was killed.")
 
+            # Clear night state
+            game.protected_players = []
             kill_announcement = "\n\n".join(dawn_lines) if dawn_lines else "A new day begins."
+
+            # Lock saboteur channel for day
+            await self._set_saboteur_channel_locked(guild, game, locked=True)
 
             # Check win condition
             win_team = game_logic.check_win_condition(game.get_alive_players(), game.roles, game.settings)
@@ -1197,6 +1224,78 @@ class Moderator(commands.Cog):
         if player_actions_cog:
             return player_actions_cog.get_game_from_channel(channel_id)
         return None, None
+
+    def _find_game_from_any_channel(self, channel_id: int):
+        """Find a game from any channel including MC booth and saboteur channel."""
+        game, day = self._find_game_from_channel(channel_id)
+        if game:
+            return game, day
+        games = database.load_games()
+        for g in games.values():
+            if g.team_channels.get("mc") == channel_id:
+                return g, g.current_day
+            if g.team_channels.get("saboteurs") == channel_id:
+                return g, g.current_day
+            if g.team_channels.get("dead") == channel_id:
+                return g, g.current_day
+        return None, None
+
+    async def _set_saboteur_channel_locked(self, guild, game, locked: bool):
+        """Lock or unlock the saboteur channel for alive saboteurs."""
+        sab_channel_id = game.team_channels.get("saboteurs")
+        if not sab_channel_id:
+            return
+        try:
+            sab_channel = await self.bot.fetch_channel(sab_channel_id)
+            for pid in game.get_alive_players():
+                if game.get_player_team(pid) == "saboteur" and pid > 0:
+                    try:
+                        member = await guild.fetch_member(pid)
+                        await sab_channel.set_permissions(
+                            member, view_channel=True, send_messages=not locked
+                        )
+                    except Exception:
+                        pass
+            if locked:
+                await sab_channel.send("🔒 *Channel locked — it's daytime.*")
+            else:
+                await sab_channel.send("🔓 *Channel unlocked — night has fallen. Coordinate your kill.*")
+        except Exception:
+            pass
+
+    async def _execute_kill(self, guild, game, player_id: int, user_names: Dict):
+        """Execute a player kill — handles all death permissions."""
+        game.eliminate_player(player_id)
+
+        if player_id > 0:
+            from utils import role_manager
+            dead_role_id = game.discord_roles.get("dead")
+            player_role_id = game.discord_roles.get("player")
+            if dead_role_id:
+                await role_manager.assign_player_role(guild, player_id, dead_role_id)
+            if player_role_id:
+                await role_manager.remove_player_role(guild, player_id, player_role_id)
+
+            # Afterlife access
+            dead_channel_id = game.team_channels.get("dead")
+            if dead_channel_id:
+                try:
+                    dead_ch = await self.bot.fetch_channel(dead_channel_id)
+                    member = await guild.fetch_member(player_id)
+                    await dead_ch.set_permissions(member, view_channel=True, send_messages=False)
+                except Exception:
+                    pass
+
+            # Saboteur channel read-only if they were a saboteur
+            if game.get_player_team(player_id) == "saboteur":
+                sab_id = game.team_channels.get("saboteurs")
+                if sab_id:
+                    try:
+                        sab_ch = await self.bot.fetch_channel(sab_id)
+                        member = await guild.fetch_member(player_id)
+                        await sab_ch.set_permissions(member, view_channel=True, send_messages=False)
+                    except Exception:
+                        pass
 
     # --- Game Settings ---
 
