@@ -1263,7 +1263,7 @@ class Moderator(commands.Cog):
         except Exception:
             pass
 
-    async def _execute_kill(self, guild, game, player_id: int, user_names: Dict):
+    async def _execute_kill(self, guild, game, player_id: int, user_names: dict):
         """Execute a player kill — handles all death permissions."""
         game.eliminate_player(player_id)
 
